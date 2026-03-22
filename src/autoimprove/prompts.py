@@ -120,26 +120,22 @@ If this project is a library where the test suite IS the primary metric, that's 
 `test_suite` can be both the primary evaluator and the most heavily weighted one. But \
 make that decision consciously after analyzing what the project does, not by default.
 
-### 2b. Supplementary Evaluators
+### 2b. Supplementary Evaluators (Optional)
 
-Create additional evaluator scripts for code quality dimensions. These catch regressions \
-and encourage clean code, but they should NOT dominate the composite score.
+**Default: start with just the primary evaluator.** You may add supplementary evaluators \
+later if you identify a specific dimension that matters, but do not add them preemptively. \
+Every supplementary evaluator dilutes the signal from the primary metric and biases the \
+agent toward optimizing for that evaluator instead of making the project genuinely better.
 
-| Evaluator | What it measures | Typical weight | When to use |
-|-----------|-----------------|---------------|-------------|
-| `test_suite` | Test pass rate | 2.0 | Always (if tests exist or should exist) |
-| `lint` | Linter violations (ruff, eslint, clippy) | 1.0 | Always |
-| `type_coverage` | Type annotation completeness | 0.5 | Typed languages |
-| `complexity` | Cyclomatic complexity | 0.5 | Large codebases |
-| `test_coverage` | Line/branch coverage | 1.0 | If coverage tooling exists |
-| `build` | Clean build with no warnings | 1.5 | Compiled languages |
-| `doc_coverage` | Docstring/JSDoc coverage | 0.5 | Libraries/APIs |
+The agent should decide for itself what improvements are worth pursuing — better tests, \
+cleaner code, faster performance, whatever — based on reading the codebase and thinking, \
+not because an evaluator score rewards it. If you do add a supplementary evaluator, it \
+should measure something the project's maintainers would consider a hard requirement, \
+not a nice-to-have.
 
-**Weight guidelines**: The primary evaluator should have the highest weight — typically \
-2–5x any supplementary evaluator. If the primary evaluator is `test_suite` (e.g., for a \
-library), give it weight 3.0+ and keep supplementary evaluators at 0.5–1.5. An evaluator \
-that can be gamed trivially (e.g. adding `# type: ignore` everywhere) should have a \
-lower weight.
+**Weight guidelines**: The primary evaluator must account for **at least 50%** of the \
+composite score. If you add supplementary evaluators, keep their individual weights at \
+0.5–2.0 and verify that `primary_weight / total_weight >= 0.5`.
 
 ### 2c. Evaluator Script Requirements
 
@@ -261,11 +257,15 @@ def main():
     total_w = sum(r["weight"] for r in results)
     composite = sum(r["score"] * r["weight"] for r in results) / total_w if total_w else 0.0
 
-    print(json.dumps({{
+    output = json.dumps({{
         "composite_score": round(composite, 6),
         "elapsed_seconds": round(time.time() - t0, 1),
         "evaluators": results,
-    }}, indent=2))
+    }}, indent=2)
+    print(output)
+
+    # Always save to run.log
+    (here / "run.log").write_text(output + "\\n")
 
 
 if __name__ == "__main__":
@@ -334,8 +334,8 @@ LOOP FOREVER:
 1. Pick a focused improvement (one idea per experiment)
 2. Edit the code
 3. git commit -m "experiment: <description>"
-4. Run: uv run .autoimprove/eval_harness.py > .autoimprove/run.log 2>&1
-5. Read: cat .autoimprove/run.log (or extract composite_score)
+4. Run: uv run .autoimprove/eval_harness.py
+5. Read: cat .autoimprove/run.log (auto-saved by the harness)
 6. If crashed: read the error, try to fix, or abandon
 7. Log to results.tsv
 8. If improved: keep the commit, update baseline
@@ -353,12 +353,10 @@ Each experiment must be evaluable within this window.
 
 **6. Strategy** — Prioritized improvement ideas based on the baseline:
 - **Start with the primary metric.** If the project trains a model and the baseline \
-val_loss evaluator scores 0.3, improving model architecture or training loop is higher \
-impact than adding type annotations.
-- Look at which evaluator has the most room for improvement AND the highest weight — \
-that's where to focus first.
-- Include specific targets: "Add return type annotations to these 12 functions in \
-model.py" is better than "improve type coverage."
+evaluator scores 0.3, improving model architecture or training loop has the highest \
+impact.
+- Focus on changes that improve the primary metric. The agent decides what approach \
+to take — there is no prescribed list of improvements.
 - The simplicity criterion: "All else equal, simpler is better. Removing code and \
 getting equal or better results is a great outcome."
 - Crash recovery: "If it's a typo, fix and re-run. If the idea is broken, log crash \
@@ -411,10 +409,7 @@ evaluators:
     description: "<what it measures — the primary metric>"
     weight: <float — highest weight, typically 3.0-5.0>
     timeout: {experiment_duration}
-  - name: "<supplementary_evaluator>"
-    description: "<what it measures>"
-    weight: <float — lower than primary, typically 0.5-2.0>
-    timeout: <seconds>
+  # Add supplementary evaluators only if genuinely needed
 ```
 
 ---
@@ -444,10 +439,10 @@ Before starting the improvement loop, verify:
 - [ ] `.autoimprove/analysis.md` identifies the **primary success metric** for this project
 - [ ] `.autoimprove/evaluators/` has a **primary evaluator** that measures what actually \
 matters
-- [ ] `.autoimprove/evaluators/` has supplementary evaluators for code quality
+- [ ] Supplementary evaluators (if any) are genuinely necessary, not just cosmetic
 - [ ] `.autoimprove/eval_harness.py` exists and runs successfully
 - [ ] `.autoimprove/config.yaml` exists with evaluator weights (primary evaluator has \
-highest weight)
+highest weight and accounts for >= 50%% of composite score)
 - [ ] `.autoimprove/program.md` exists with all sections filled in
 - [ ] `.autoimprove/baselines/baseline.json` exists with real scores
 - [ ] `.autoimprove/results.tsv` has the header row and baseline entry

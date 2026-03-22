@@ -28,16 +28,17 @@ from autoimprove.config import (
 def main():
     """Autonomous self-improvement for any software repo.
 
-    Creates an instruction document that a coding agent reads to analyze
-    your repository, design evaluation metrics, and run an infinite
-    improvement loop.
-
-    Inspired by karpathy/autoresearch — generalized to any codebase.
-
+    \b
     Usage:
-        1. autoimprove init ./my-repo
-        2. Tell your coding agent: "read .autoimprove/INSTRUCTIONS.md and
-           set up the improvement program"
+      1. autoimprove init ./my-repo
+      2. Open your coding agent (Claude Code, Copilot, OpenCode, ...)
+      3. Tell it: "read .autoimprove/INSTRUCTIONS.md and execute all phases"
+      4. Review program.md when the agent finishes Phase 3
+      5. The agent runs the improvement loop until you stop it
+
+    \b
+    Check progress:
+      autoimprove status ./my-repo
     """
     pass
 
@@ -58,19 +59,16 @@ def main():
 def init(path: str, force: bool, duration: int):
     """Initialize a repository for autonomous self-improvement.
 
-    Creates .autoimprove/ with INSTRUCTIONS.md — a detailed guide for your
-    coding agent to analyze the repo, design evaluators, write program.md,
-    and run the improvement loop.
+    \b
+    Creates .autoimprove/ with INSTRUCTIONS.md — a detailed guide
+    for your coding agent to analyze the repo, design evaluators,
+    write program.md, and run the improvement loop.
 
-    No API keys, no LLM calls, no heuristics. The agent does the thinking.
-
+    \b
     Examples:
-
-        autoimprove init ./my-project
-
-        autoimprove init /path/to/repo --force
-
-        autoimprove init ./ml-repo --duration 600
+      autoimprove init ./my-project
+      autoimprove init /path/to/repo --force
+      autoimprove init ./ml-repo --duration 600
     """
     repo_path = Path(path).resolve()
 
@@ -91,11 +89,12 @@ def init(path: str, force: bool, duration: int):
 def status(path: str):
     """Show current improvement status for a repo.
 
+    \b
     Reads results.tsv, baseline, and config to display progress.
 
+    \b
     Examples:
-
-        autoimprove status ./my-project
+      autoimprove status ./my-project
     """
     repo_path = Path(path).resolve()
     ai_dir = repo_path / AUTOIMPROVE_DIR
