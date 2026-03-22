@@ -2,6 +2,9 @@
 
 Generates the .autoimprove/ directory inside a target repo with all necessary
 artifacts: config, program.md, eval harness, custom evaluators, and baselines.
+
+All detection is heuristic-based — no LLM calls required. The coding agent
+that runs this tool can refine the generated artifacts afterwards.
 """
 
 from __future__ import annotations
@@ -12,7 +15,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from autoimprove.analyzer import analyze_repo, discover_evaluators
+from autoimprove.analyzer import (
+    classify_files,
+    detect_tech_stack,
+    discover_evaluators,
+)
 from autoimprove.config import (
     AUTOIMPROVE_DIR,
     BASELINE_DIR,
@@ -24,16 +31,12 @@ from autoimprove.config import (
     PROGRAM_FILE,
     RESULTS_FILE,
     EvaluatorConfig,
-    FileClassification,
-    LLMConfig,
     ProjectConfig,
-    TechStack,
 )
-from autoimprove.llm import LLMClient
 from autoimprove.prompts import (
     EVAL_HARNESS_TEMPLATE,
-    GENERATE_PROGRAM_SYSTEM,
-    GENERATE_PROGRAM_USER,
+    EVALUATOR_TEMPLATES,
+    PROGRAM_MD_TEMPLATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,20 +44,19 @@ logger = logging.getLogger(__name__)
 
 def initialize_repo(
     repo_path: Path,
-    llm_config: LLMConfig | None = None,
     force: bool = False,
 ) -> ProjectConfig:
     """Initialize a repository for autoimprove.
 
     This is the main entry point for `autoimprove init`. It:
-    1. Analyzes the repo (tech stack, file structure, etc.)
-    2. Discovers custom evaluators via LLM
-    3. Generates .autoimprove/ with all artifacts
-    4. Runs baseline evaluation
+    1. Heuristically detects the tech stack
+    2. Classifies files into mutable/protected
+    3. Discovers relevant evaluators from the template library
+    4. Generates .autoimprove/ with all artifacts
+    5. Runs baseline evaluation
 
     Args:
         repo_path: Path to the target repository root.
-        llm_config: LLM configuration. Uses defaults if not provided.
         force: If True, overwrite existing .autoimprove/ directory.
 
     Returns:
@@ -71,38 +73,28 @@ def initialize_repo(
     if not repo_path.is_dir():
         raise NotADirectoryError(f"Not a directory: {repo_path}")
 
-    # Set up LLM client
-    if llm_config is None:
-        llm_config = LLMConfig()
-    llm = LLMClient(llm_config)
-
-    # --- Step 1: Analyze the repo ---
+    # --- Step 1: Detect tech stack ---
     print("Analyzing repository...")
-    analysis = analyze_repo(repo_path, llm)
+    tech_stack, repo_summary = detect_tech_stack(repo_path)
 
-    tech_data = analysis.get("tech_stack", {})
-    tech_stack = TechStack(**tech_data)
-
-    file_class_data = analysis.get("file_classification", {})
-    file_classification = FileClassification(**file_class_data)
-
-    repo_summary = analysis.get("repo_summary", "")
-    improvement_areas = analysis.get("improvement_areas", [])
-
-    print(f"  Languages: {', '.join(tech_stack.languages)}")
-    print(f"  Frameworks: {', '.join(tech_stack.frameworks)}")
+    print(f"  Languages: {', '.join(tech_stack.languages) or '(none detected)'}")
+    print(f"  Frameworks: {', '.join(tech_stack.frameworks) or '(none detected)'}")
+    print(f"  Package manager: {tech_stack.package_manager or '(none detected)'}")
     print(f"  Test command: {tech_stack.test_command or '(none detected)'}")
-    print(f"  Mutable patterns: {', '.join(file_classification.mutable_patterns)}")
-    print(f"  Protected patterns: {', '.join(file_classification.protected_patterns[:5])}...")
 
-    # --- Step 2: Discover custom evaluators ---
-    print("\nDiscovering evaluation metrics...")
-    evaluator_defs = discover_evaluators(repo_path, analysis, llm)
-    print(f"  Found {len(evaluator_defs)} custom evaluators:")
+    # --- Step 2: Classify files ---
+    file_classification = classify_files(repo_path, tech_stack)
+    print(f"  Mutable patterns: {', '.join(file_classification.mutable_patterns[:5])}"
+          f"{'...' if len(file_classification.mutable_patterns) > 5 else ''}")
+
+    # --- Step 3: Discover evaluators ---
+    print("\nSelecting evaluators...")
+    evaluator_defs = discover_evaluators(repo_path, tech_stack)
+    print(f"  Selected {len(evaluator_defs)} evaluators:")
     for edef in evaluator_defs:
         print(f"    - {edef['name']}: {edef.get('description', '')}")
 
-    # --- Step 3: Create .autoimprove/ directory ---
+    # --- Step 4: Create .autoimprove/ directory ---
     print("\nGenerating .autoimprove/ artifacts...")
     _create_directory_structure(ai_dir)
 
@@ -121,22 +113,28 @@ def initialize_repo(
     # Build and save config
     config = ProjectConfig(
         repo_path=str(repo_path),
+        repo_summary=repo_summary,
         tech_stack=tech_stack,
         file_classification=file_classification,
         evaluators=evaluator_configs,
-        llm=llm_config,
     )
     config_path = ai_dir / CONFIG_FILE
     config.save(config_path)
     print(f"  Created {CONFIG_FILE}")
 
-    # Write evaluator scripts
+    # Write evaluator scripts from templates
     evaluators_dir = ai_dir / EVALUATORS_DIR
     for edef in evaluator_defs:
-        script_name = f"{edef['name']}.py"
-        script_path = evaluators_dir / script_name
-        script_content = edef.get("script_content", "")
-        if script_content:
+        template_key = edef.get("template_key", "")
+        template = EVALUATOR_TEMPLATES.get(template_key, "")
+        if template:
+            script_name = f"{edef['name']}.py"
+            script_path = evaluators_dir / script_name
+            template_vars = edef.get("template_vars", {})
+            if template_vars:
+                script_content = template.format(**template_vars)
+            else:
+                script_content = template
             script_path.write_text(script_content)
             script_path.chmod(0o755)
     print(f"  Created {len(evaluator_defs)} evaluator scripts")
@@ -147,16 +145,13 @@ def initialize_repo(
     harness_path.chmod(0o755)
     print(f"  Created {EVAL_HARNESS_FILE}")
 
-    # Generate program.md
-    print("\nGenerating program.md...")
+    # Generate program.md from template
     program_md = _generate_program_md(
-        llm=llm,
-        repo_path=str(repo_path),
+        repo_path=repo_path,
         repo_summary=repo_summary,
         tech_stack=tech_stack,
         file_classification=file_classification,
         evaluator_configs=evaluator_configs,
-        improvement_areas=improvement_areas,
     )
     program_path = ai_dir / PROGRAM_FILE
     program_path.write_text(program_md)
@@ -167,7 +162,7 @@ def initialize_repo(
     results_path.write_text("experiment\tcomposite_score\tstatus\tdescription\n")
     print(f"  Created {RESULTS_FILE}")
 
-    # --- Step 4: Run baseline evaluation ---
+    # --- Step 5: Run baseline evaluation ---
     print("\nRunning baseline evaluation...")
     baseline = _run_baseline(repo_path, ai_dir)
     if baseline:
@@ -181,8 +176,7 @@ def initialize_repo(
         print("  WARNING: Baseline evaluation failed. You may need to fix evaluator scripts.")
 
     print(f"\nInitialization complete! Files are in {ai_dir}/")
-    print(f"Edit {PROGRAM_FILE} to customize agent behavior.")
-    print(f"Run 'autoimprove run {repo_path}' to start autonomous improvement.")
+    print(f"\nNext step: read .autoimprove/{PROGRAM_FILE} and start improving!")
 
     return config
 
@@ -192,48 +186,44 @@ def _create_directory_structure(ai_dir: Path) -> None:
     for subdir in [EVALUATORS_DIR, EXPERIMENTS_DIR, BASELINE_DIR]:
         (ai_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    # Create __init__.py in evaluators so they can be a package if needed
-    init_path = ai_dir / EVALUATORS_DIR / "__init__.py"
-    if not init_path.exists():
-        init_path.write_text("")
-
 
 def _generate_program_md(
-    llm: LLMClient,
-    repo_path: str,
+    repo_path: Path,
     repo_summary: str,
-    tech_stack: TechStack,
-    file_classification: FileClassification,
+    tech_stack: Any,
+    file_classification: Any,
     evaluator_configs: list[EvaluatorConfig],
-    improvement_areas: list[str],
 ) -> str:
-    """Generate the program.md agent instruction file via LLM."""
+    """Generate the program.md agent instruction file from template."""
     evaluator_descriptions = "\n".join(
-        f"- {e.name} (weight={e.weight}): {e.description}"
+        f"- **{e.name}** (weight={e.weight}): {e.description}"
         for e in evaluator_configs
     )
 
-    user_prompt = GENERATE_PROGRAM_USER.format(
-        repo_path=repo_path,
-        repo_summary=repo_summary,
-        languages=", ".join(tech_stack.languages),
-        frameworks=", ".join(tech_stack.frameworks),
-        build_system=tech_stack.build_system,
-        package_manager=tech_stack.package_manager,
-        test_framework=tech_stack.test_framework,
-        test_command=tech_stack.test_command,
-        build_command=tech_stack.build_command,
-        mutable_patterns="\n".join(f"- {p}" for p in file_classification.mutable_patterns),
-        protected_patterns="\n".join(f"- {p}" for p in file_classification.protected_patterns),
-        evaluator_descriptions=evaluator_descriptions,
-        improvement_areas="\n".join(f"- {a}" for a in improvement_areas),
-    )
+    mutable_patterns_list = "\n".join(
+        f"  - `{p}`" for p in file_classification.mutable_patterns
+    ) or "  - (no mutable patterns detected — you may need to configure this)"
 
-    return llm.analyze(
-        GENERATE_PROGRAM_SYSTEM,
-        user_prompt,
-        temperature=0.5,
-        max_tokens=4096,
+    protected_patterns_list = "\n".join(
+        f"  - `{p}`" for p in file_classification.protected_patterns[:15]
+    )
+    if len(file_classification.protected_patterns) > 15:
+        protected_patterns_list += f"\n  - ... and {len(file_classification.protected_patterns) - 15} more"
+
+    return PROGRAM_MD_TEMPLATE.format(
+        repo_name=repo_path.name,
+        repo_summary=repo_summary,
+        languages=", ".join(tech_stack.languages) or "(none detected)",
+        frameworks=", ".join(tech_stack.frameworks) or "(none detected)",
+        package_manager=tech_stack.package_manager or "(none detected)",
+        build_system=tech_stack.build_system or "(none detected)",
+        test_framework=tech_stack.test_framework or "(none detected)",
+        test_command=tech_stack.test_command or "(none detected)",
+        build_command=tech_stack.build_command or "(none)",
+        run_command=tech_stack.run_command or "(none)",
+        mutable_patterns_list=mutable_patterns_list,
+        protected_patterns_list=protected_patterns_list,
+        evaluator_descriptions=evaluator_descriptions or "- (no evaluators configured)",
     )
 
 

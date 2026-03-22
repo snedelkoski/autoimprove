@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants — directory/file names inside .autoimprove/
 # ---------------------------------------------------------------------------
 
 AUTOIMPROVE_DIR = ".autoimprove"
@@ -23,49 +22,6 @@ BASELINE_DIR = "baselines"
 BASELINE_FILE = "baseline.json"
 EXPERIMENTS_DIR = "experiments"
 EVALUATORS_DIR = "evaluators"
-
-
-# ---------------------------------------------------------------------------
-# LLM settings
-# ---------------------------------------------------------------------------
-
-class LLMConfig(BaseModel):
-    """LLM provider configuration."""
-
-    model: str = Field(
-        default="claude-opus-4-20250514",
-        description="Model identifier",
-    )
-    base_url: str = Field(
-        default="https://api.anthropic.com/v1/",
-        description="API base URL (OpenAI-compatible endpoint)",
-    )
-    api_key: str = Field(
-        default="",
-        description="API key (defaults to OPENAI_API_KEY or ANTHROPIC_API_KEY env var)",
-    )
-    max_tokens: int = Field(default=4096, description="Max tokens per response")
-    temperature: float = Field(default=0.7, description="Sampling temperature")
-
-    def resolve_api_key(self) -> str:
-        """Resolve API key from config or environment."""
-        if self.api_key:
-            return self.api_key
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
-            val = os.environ.get(var)
-            if val:
-                return val
-        raise ValueError(
-            "No API key found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, "
-            "or configure api_key in .autoimprove/config.yaml"
-        )
-
-    def resolve_base_url(self) -> str:
-        """Resolve base URL from config or environment."""
-        env_url = os.environ.get("OPENAI_BASE_URL")
-        if env_url:
-            return env_url
-        return self.base_url
 
 
 # ---------------------------------------------------------------------------
@@ -120,26 +76,15 @@ class FileClassification(BaseModel):
 class ProjectConfig(BaseModel):
     """Full autoimprove configuration for a target repo."""
 
-    version: str = Field(default="0.1.0", description="Config schema version")
+    version: str = Field(default="0.2.0", description="Config schema version")
     repo_path: str = Field(description="Absolute path to the target repository")
+    repo_summary: str = Field(
+        default="",
+        description="One-line summary of what this repo does",
+    )
     tech_stack: TechStack = Field(default_factory=TechStack)
     file_classification: FileClassification = Field(default_factory=FileClassification)
     evaluators: list[EvaluatorConfig] = Field(default_factory=list)
-    llm: LLMConfig = Field(default_factory=LLMConfig)
-
-    # Experiment settings
-    experiment_timeout: int = Field(
-        default=600,
-        description="Max seconds per experiment (including eval)",
-    )
-    max_fix_retries: int = Field(
-        default=3,
-        description="Max retries when an experiment crashes",
-    )
-    branch_prefix: str = Field(
-        default="autoimprove",
-        description="Git branch prefix for experiments",
-    )
 
     def save(self, path: Path) -> None:
         """Save config to YAML file."""

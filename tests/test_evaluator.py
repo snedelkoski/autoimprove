@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from autoimprove.evaluator import (
+    IMPROVEMENT_EPSILON,
     EvalResult,
     compare_to_baseline,
     load_baseline,
@@ -87,10 +88,47 @@ class TestCompareToBaseline:
         assert improved is False
         assert abs(delta - (-0.1)) < 1e-9
 
+    def test_epsilon_prevents_noise(self):
+        """Floating point noise below epsilon should not count as improvement."""
+        result = EvalResult(
+            composite_score=0.8 + 1e-10,  # tiny floating point noise
+            evaluator_results=[],
+            elapsed_seconds=1.0,
+        )
+        baseline = {"composite_score": 0.8}
+        improved, delta = compare_to_baseline(result, baseline)
+        assert improved is False  # below epsilon threshold
+
+    def test_above_epsilon_counts(self):
+        """Improvement above epsilon should count."""
+        result = EvalResult(
+            composite_score=0.8 + IMPROVEMENT_EPSILON * 2,
+            evaluator_results=[],
+            elapsed_seconds=1.0,
+        )
+        baseline = {"composite_score": 0.8}
+        improved, delta = compare_to_baseline(result, baseline)
+        assert improved is True
+
+    def test_custom_epsilon(self):
+        """Custom epsilon threshold should work."""
+        result = EvalResult(
+            composite_score=0.81,
+            evaluator_results=[],
+            elapsed_seconds=1.0,
+        )
+        baseline = {"composite_score": 0.8}
+        # With very large epsilon, 0.01 improvement doesn't count
+        improved, delta = compare_to_baseline(result, baseline, epsilon=0.05)
+        assert improved is False
+
+        # With default epsilon, 0.01 improvement counts
+        improved, delta = compare_to_baseline(result, baseline)
+        assert improved is True
+
 
 class TestBaselineIO:
     def test_save_and_load(self, tmp_path):
-        # Create .autoimprove/baselines/ structure
         ai_dir = tmp_path / ".autoimprove" / "baselines"
         ai_dir.mkdir(parents=True)
 

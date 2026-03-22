@@ -1,7 +1,8 @@
 """Evaluation orchestration for autoimprove.
 
 Runs the eval harness, parses results, and compares against baselines.
-This module is used by the runner during the improvement loop.
+Used during initialization (baseline) and by the agent during the
+improvement loop.
 """
 
 from __future__ import annotations
@@ -17,10 +18,13 @@ from autoimprove.config import (
     BASELINE_DIR,
     BASELINE_FILE,
     EVAL_HARNESS_FILE,
-    ProjectConfig,
 )
 
 logger = logging.getLogger(__name__)
+
+# Minimum improvement threshold to prevent floating point noise
+# from triggering false positives.
+IMPROVEMENT_EPSILON = 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -84,12 +88,12 @@ class EvalResult:
 # Running evaluation
 # ---------------------------------------------------------------------------
 
-def run_evaluation(repo_path: Path, config: ProjectConfig) -> EvalResult:
+def run_evaluation(repo_path: Path, timeout: int = 600) -> EvalResult:
     """Run the full evaluation harness and return results.
 
     Args:
         repo_path: Path to the target repository root.
-        config: The project configuration.
+        timeout: Max seconds to wait for the eval harness.
 
     Returns:
         EvalResult with composite score and per-evaluator scores.
@@ -99,8 +103,6 @@ def run_evaluation(repo_path: Path, config: ProjectConfig) -> EvalResult:
 
     if not harness_path.exists():
         return EvalResult.from_crash(f"Eval harness not found: {harness_path}")
-
-    timeout = config.experiment_timeout
 
     try:
         result = subprocess.run(
@@ -168,12 +170,19 @@ def save_baseline(repo_path: Path, result: EvalResult) -> None:
 def compare_to_baseline(
     result: EvalResult,
     baseline: dict[str, Any] | None,
+    epsilon: float = IMPROVEMENT_EPSILON,
 ) -> tuple[bool, float]:
     """Compare evaluation result to baseline.
 
+    Args:
+        result: The new evaluation result.
+        baseline: Previous baseline dict (or None for first run).
+        epsilon: Minimum improvement threshold to count as "improved".
+            Prevents floating point noise from triggering false positives.
+
     Returns:
         (improved, delta) where improved is True if the composite score
-        is strictly better (higher) than baseline, and delta is the difference.
+        exceeds the baseline by at least epsilon, and delta is the difference.
     """
     if baseline is None:
         # No baseline — first run is always "improved"
@@ -182,7 +191,7 @@ def compare_to_baseline(
     baseline_score = baseline.get("composite_score", 0.0)
     delta = result.composite_score - baseline_score
 
-    # Strictly improved (even tiny improvements count)
-    improved = delta > 0
+    # Must exceed baseline by at least epsilon
+    improved = delta > epsilon
 
     return improved, delta

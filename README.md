@@ -14,19 +14,20 @@ autoimprove takes the core pattern from autoresearch — where an AI agent auton
 | Fixed eval metric (val_bpb) | Auto-discovered multi-metric evaluation |
 | Single mutable file (train.py) | Auto-detected mutable surface area |
 | Manual program.md | Auto-generated program.md (still human-editable) |
-| Direct file edits | Shadow copies + git branches |
-| Requires specific GPU | Runs anywhere |
+| Requires specific GPU setup | Runs anywhere |
+
+**Key design principle:** autoimprove makes **no LLM API calls**. It is designed to be used **inside AI coding agents** (Claude Code, OpenCode, GitHub Copilot). The agent IS the LLM. All repo analysis is heuristic-based — the agent supplements with its own intelligence.
 
 ### The self-improvement loop
 
 ```
 LOOP FOREVER:
-  1. LLM reads program.md for strategy + experiment history
-  2. LLM proposes a focused experiment (a code change)
-  3. Shadow-copy originals, apply changes
-  4. Run evaluation harness (tests + custom evaluators)
+  1. Agent reads program.md for strategy + experiment history
+  2. Agent proposes a focused experiment (a code change)
+  3. Agent modifies files within the mutable surface area
+  4. Agent runs evaluation harness → gets composite score
   5. If score improved → keep (commit, update baseline)
-  6. If score worse → discard (restore from shadow)
+  6. If score worse → discard (git revert)
   7. Log to results.tsv
   8. Repeat (never stop, never ask)
 ```
@@ -52,58 +53,68 @@ autoimprove init ./my-project
 
 # 2. (Optional) Edit .autoimprove/program.md to customize agent behavior
 
-# 3. Start the autonomous improvement loop
-ANTHROPIC_API_KEY=sk-... autoimprove run ./my-project
+# 3. Tell your coding agent to start the loop
+#    In Claude Code, OpenCode, Copilot, etc.:
+#    "Read .autoimprove/program.md and start improving"
 
 # 4. Check progress
 autoimprove status ./my-project
 ```
 
+No API keys needed. No LLM configuration. Just `init` and hand off to your coding agent.
+
 ## What `init` does
 
 When you run `autoimprove init`, it:
 
-1. **Analyzes** your repo using an LLM — detects language, framework, build system, test setup
-2. **Classifies files** into mutable (core source) vs protected (tests, config, CI)
-3. **Discovers evaluation metrics** beyond your existing tests — code complexity, type coverage, duplication, security, etc.
-4. **Generates** `.autoimprove/` with:
-   - `config.yaml` — detected settings
+1. **Analyzes** your repo heuristically — detects language, framework, build system, test setup from file extensions, config files (pyproject.toml, package.json, Cargo.toml, go.mod), and lock files
+2. **Classifies files** into mutable (core source) vs protected (tests, config, CI, docs)
+3. **Discovers evaluation metrics** beyond your existing tests — code complexity, type coverage, lint score, and more depending on tech stack
+4. **Selects evaluator templates** from a built-in library based on detected stack
+5. **Generates** `.autoimprove/` with:
+   - `config.yaml` — detected tech stack, file classification, evaluator configs
    - `program.md` — agent instruction file (human-editable)
    - `eval_harness.py` — fixed evaluation entry point
-   - `evaluators/*.py` — custom evaluator scripts
+   - `evaluators/*.py` — evaluator scripts with PEP 723 inline metadata (run via `uv run`)
    - `results.tsv` — experiment log
-5. **Runs baseline** evaluation and saves scores
+   - `baselines/baseline.json` — baseline scores
+   - `experiments/` — experiment workspace
+6. **Runs baseline** evaluation and saves initial scores
 
-## What `run` does
+### Supported tech stacks
 
-The `run` command starts the autonomous improvement loop:
+| Language | Detection | Evaluators |
+|----------|-----------|------------|
+| Python | pyproject.toml, setup.py, requirements.txt | test_suite, code_complexity, type_coverage, lint (ruff) |
+| JavaScript/TypeScript | package.json | test_suite, lint (eslint) |
+| Rust | Cargo.toml | test_suite, clippy |
+| Go | go.mod | test_suite, vet |
+| Java | pom.xml, build.gradle | test_suite |
+| Ruby | Gemfile | test_suite |
 
-- Creates a git branch (`autoimprove/<timestamp>`)
-- LLM proposes experiments based on program.md, current code, and history
-- Changes are applied with shadow copies (originals are never corrupted)
-- Evaluation harness runs all evaluators and computes composite score
-- Improvements are kept (committed), regressions are discarded (reverted)
-- Everything is logged to `results.tsv`
-- Runs indefinitely until Ctrl+C
+Additional languages and evaluators are detected from file extensions and build tools.
 
-## Configuration
+## Commands
 
-### LLM Provider
+### `autoimprove init <path>`
 
-autoimprove uses an OpenAI-compatible API. Default: Claude Opus 4.6 via Anthropic.
+Initialize a repo for self-improvement. Creates `.autoimprove/` directory with all artifacts.
 
 ```bash
-# Anthropic (default)
-ANTHROPIC_API_KEY=sk-... autoimprove run ./my-project
-
-# OpenAI
-OPENAI_API_KEY=sk-... autoimprove run ./my-project --model gpt-4o --base-url https://api.openai.com/v1
-
-# Local model (e.g., ollama)
-OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_API_KEY=ollama autoimprove run ./my-project --model llama3
+autoimprove init ./my-project           # first time
+autoimprove init ./my-project --force   # overwrite existing
+autoimprove init ./my-project -v        # verbose output
 ```
 
-### Editing program.md
+### `autoimprove status <path>`
+
+Show improvement status — baseline scores, experiment history, progress.
+
+```bash
+autoimprove status ./my-project
+```
+
+## Editing program.md
 
 The `program.md` file in `.autoimprove/` is your control surface. Edit it to:
 
@@ -112,20 +123,48 @@ The `program.md` file in `.autoimprove/` is your control surface. Edit it to:
 - Adjust experiment strategy
 - Add domain-specific context
 
+The agent reads this file at the start of each experiment iteration.
+
+## Generated `.autoimprove/` structure
+
+```
+.autoimprove/
+  config.yaml          # Tech stack, mutable/protected patterns, evaluator configs
+  program.md           # Agent instructions (the experiment loop)
+  eval_harness.py      # Fixed eval runner (runs all evaluators, outputs JSON)
+  results.tsv          # Experiment log (TSV)
+  evaluators/          # Individual evaluator scripts (PEP 723, run via uv run)
+    test_suite.py
+    code_complexity.py
+    type_coverage.py
+    lint_score.py
+  baselines/
+    baseline.json      # Baseline evaluation scores
+  experiments/         # Experiment workspace
+```
+
 ## Project structure
 
 ```
 src/autoimprove/
   __init__.py      — version
-  cli.py           — Click CLI: init, run, status
+  cli.py           — Click CLI: init, status
   config.py        — Pydantic config models
-  llm.py           — OpenAI-compatible LLM client
-  prompts.py       — All LLM prompt templates
-  analyzer.py      — Repo analysis (tech stack, file classification)
+  prompts.py       — Templates: program.md, eval harness, evaluator scripts
+  analyzer.py      — Heuristic repo analysis (tech stack, file classification)
   initializer.py   — Generates .autoimprove/ artifacts
-  evaluator.py     — Evaluation orchestration + scoring
-  runner.py        — The autonomous improvement loop
+  evaluator.py     — Evaluation scoring + baseline comparison
 ```
+
+## Dependencies
+
+Minimal by design:
+
+- `click` — CLI framework
+- `pydantic` — config validation
+- `pyyaml` — config serialization
+
+No LLM client libraries. No API keys. No network calls.
 
 ## License
 
