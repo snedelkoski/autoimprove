@@ -70,8 +70,9 @@ If no evaluation script exists yet, describe what one would need to do.
 - **Editable files**: which files contain the core logic the agent should improve. \
 List them explicitly by name — not glob patterns. If there are many (>20), group by \
 directory.
-- **Fixed files**: which files must NOT be modified — tests, CI, configs, lock files, \
-`.autoimprove/` itself. Be explicit.
+- **Fixed files**: which files must NOT be modified — CI, configs, lock files, \
+`.autoimprove/` itself. Be explicit. Tests may be modified if they are incorrect or \
+if changes are absolutely necessary, but should generally be treated with care.
 - **Current quality issues**: what you observe — missing tests, type annotation gaps, \
 lint violations, high complexity functions, dead code, poor error handling, etc.
 
@@ -383,8 +384,9 @@ numbers. Never describe a command abstractly when you can write the exact shell 
 **2. Scope** — What the agent can and cannot modify:
 - "What you CAN do" — list the editable files by name. For each file, one line saying \
 what it contains and what kind of changes are fair game.
-- "What you CANNOT do" — list protected files/dirs. Explain why (tests are ground truth, \
-configs control the build, .autoimprove/ is the evaluation system).
+- "What you CANNOT do" — list protected files/dirs. Explain why (configs control the \
+build, .autoimprove/ is the evaluation system). Tests may be modified if they are \
+incorrect or if changes are absolutely necessary.
 
 **3. Evaluation** — How to run the eval and what the output looks like:
 - The exact command: `uv run .autoimprove/eval_harness.py`
