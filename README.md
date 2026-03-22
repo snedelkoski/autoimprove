@@ -1,146 +1,95 @@
 # autoimprove
 
-Universal autonomous self-improvement for any software repo.
+Autonomous self-improvement for any software repo.
 
-Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — but generalized to work with **any** repository: APIs, web services, microservices, infrastructure, ML training, CLI tools, libraries — literally anything.
+Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — generalized to work with **any** repository.
 
 ## How it works
 
-autoimprove takes the core pattern from autoresearch — where an AI agent autonomously experiments on code, evaluates results, and keeps improvements — and generalizes it:
+autoimprove creates an instruction document that tells a coding agent how to:
 
-| autoresearch | autoimprove |
-|-------------|------------|
-| Single domain (ML training) | Any software domain |
-| Fixed eval metric (val_bpb) | Auto-discovered multi-metric evaluation |
-| Single mutable file (train.py) | Auto-detected mutable surface area |
-| Manual program.md | Auto-generated program.md (still human-editable) |
-| Requires specific GPU setup | Runs anywhere |
+1. **Analyze** the repository — understand its structure, tech stack, quality issues
+2. **Design evaluation** — write evaluator scripts and an eval harness specific to the project
+3. **Write program.md** — a detailed, repo-specific improvement program (like karpathy's `program.md`)
+4. **Run the loop** — autonomously experiment, evaluate, keep/discard, repeat forever
 
-**Key design principle:** autoimprove makes **no LLM API calls**. It is designed to be used **inside AI coding agents** (Claude Code, OpenCode, GitHub Copilot). The agent IS the LLM. All repo analysis is heuristic-based — the agent supplements with its own intelligence.
-
-### The self-improvement loop
+The key insight: **the agent does the thinking, not the tool.** autoimprove doesn't try to detect your tech stack with heuristics or generate evaluators from templates. It writes one great instruction document, and your coding agent — which is a frontier LLM — handles the rest with its own intelligence.
 
 ```
-LOOP FOREVER:
-  1. Agent reads program.md for strategy + experiment history
-  2. Agent proposes a focused experiment (a code change)
-  3. Agent modifies files within the mutable surface area
-  4. Agent runs evaluation harness → gets composite score
-  5. If score improved → keep (commit, update baseline)
-  6. If score worse → discard (git revert)
-  7. Log to results.tsv
-  8. Repeat (never stop, never ask)
-```
+autoimprove init ./my-repo
+  └── creates .autoimprove/INSTRUCTIONS.md
 
-## Installation
-
-```bash
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install autoimprove as a tool
-uv tool install autoimprove
-
-# Or run directly without installing
-uvx autoimprove --help
+agent reads INSTRUCTIONS.md
+  └── analyzes repo, writes program.md, evaluators, config
+  └── runs the improvement loop forever
 ```
 
 ## Quick start
 
 ```bash
-# 1. Initialize your repo for self-improvement
+# Install
+uv tool install autoimprove
+
+# Initialize
 autoimprove init ./my-project
 
-# 2. (Optional) Edit .autoimprove/program.md to customize agent behavior
+# Hand off to your coding agent (Claude Code, OpenCode, Copilot, etc.)
+# Tell it: "read .autoimprove/INSTRUCTIONS.md and set up the improvement program"
 
-# 3. Tell your coding agent to start the loop
-#    In Claude Code, OpenCode, Copilot, etc.:
-#    "Read .autoimprove/program.md and start improving"
-
-# 4. Check progress
+# Check progress
 autoimprove status ./my-project
 ```
 
-No API keys needed. No LLM configuration. Just `init` and hand off to your coding agent.
+No API keys. No LLM configuration. No heuristics. Just one instruction document.
 
-## What `init` does
+## What `init` creates
 
-When you run `autoimprove init`, it:
+```
+.autoimprove/
+  INSTRUCTIONS.md   # The agent reads this — detailed setup guide
+  results.tsv       # Experiment log (header row only)
+  evaluators/       # Empty — agent creates evaluator scripts here
+  baselines/        # Empty — agent saves baseline here
+  experiments/      # Empty — workspace
+```
 
-1. **Analyzes** your repo heuristically — detects language, framework, build system, test setup from file extensions, config files (pyproject.toml, package.json, Cargo.toml, go.mod), and lock files
-2. **Classifies files** into mutable (core source) vs protected (tests, config, CI, docs)
-3. **Discovers evaluation metrics** beyond your existing tests — code complexity, type coverage, lint score, and more depending on tech stack
-4. **Selects evaluator templates** from a built-in library based on detected stack
-5. **Generates** `.autoimprove/` with:
-   - `config.yaml` — detected tech stack, file classification, evaluator configs
-   - `program.md` — agent instruction file (human-editable)
-   - `eval_harness.py` — fixed evaluation entry point
-   - `evaluators/*.py` — evaluator scripts with PEP 723 inline metadata (run via `uv run`)
-   - `results.tsv` — experiment log
-   - `baselines/baseline.json` — baseline scores
-   - `experiments/` — experiment workspace
-6. **Runs baseline** evaluation and saves initial scores
+That's it. The agent then creates:
 
-### Supported tech stacks
+- `program.md` — the improvement program (specific to this repo)
+- `config.yaml` — tech stack and evaluator weights
+- `eval_harness.py` — the evaluation runner
+- `evaluators/*.py` — individual evaluator scripts
+- `baselines/baseline.json` — initial scores
+- `analysis.md` — repo analysis notes
 
-| Language | Detection | Evaluators |
-|----------|-----------|------------|
-| Python | pyproject.toml, setup.py, requirements.txt | test_suite, code_complexity, type_coverage, lint (ruff) |
-| JavaScript/TypeScript | package.json | test_suite, lint (eslint) |
-| Rust | Cargo.toml | test_suite, clippy |
-| Go | go.mod | test_suite, vet |
-| Java | pom.xml, build.gradle | test_suite |
-| Ruby | Gemfile | test_suite |
+## Design philosophy
 
-Additional languages and evaluators are detected from file extensions and build tools.
+| autoresearch | autoimprove |
+|---|---|
+| Human writes `program.md` by hand | Agent writes `program.md` guided by `INSTRUCTIONS.md` |
+| Human writes `prepare.py` (eval) | Agent writes eval harness + evaluators |
+| Fixed domain (ML training) | Any software domain |
+| Human decides what's editable | Agent decides what's editable |
+
+The common thread: **the evaluation system is tamper-proof.** Once the baseline is established, the agent cannot modify the eval harness or evaluators — only the source code under improvement.
 
 ## Commands
 
 ### `autoimprove init <path>`
 
-Initialize a repo for self-improvement. Creates `.autoimprove/` directory with all artifacts.
+Create `.autoimprove/` scaffold with `INSTRUCTIONS.md`.
 
 ```bash
 autoimprove init ./my-project           # first time
 autoimprove init ./my-project --force   # overwrite existing
-autoimprove init ./my-project -v        # verbose output
 ```
 
 ### `autoimprove status <path>`
 
-Show improvement status — baseline scores, experiment history, progress.
+Show improvement progress — setup state, baseline scores, experiment history.
 
 ```bash
 autoimprove status ./my-project
-```
-
-## Editing program.md
-
-The `program.md` file in `.autoimprove/` is your control surface. Edit it to:
-
-- Focus the agent on specific improvement areas
-- Set constraints (e.g., "don't increase memory usage")
-- Adjust experiment strategy
-- Add domain-specific context
-
-The agent reads this file at the start of each experiment iteration.
-
-## Generated `.autoimprove/` structure
-
-```
-.autoimprove/
-  config.yaml          # Tech stack, mutable/protected patterns, evaluator configs
-  program.md           # Agent instructions (the experiment loop)
-  eval_harness.py      # Fixed eval runner (runs all evaluators, outputs JSON)
-  results.tsv          # Experiment log (TSV)
-  evaluators/          # Individual evaluator scripts (PEP 723, run via uv run)
-    test_suite.py
-    code_complexity.py
-    type_coverage.py
-    lint_score.py
-  baselines/
-    baseline.json      # Baseline evaluation scores
-  experiments/         # Experiment workspace
 ```
 
 ## Project structure
@@ -149,22 +98,16 @@ The agent reads this file at the start of each experiment iteration.
 src/autoimprove/
   __init__.py      — version
   cli.py           — Click CLI: init, status
-  config.py        — Pydantic config models
-  prompts.py       — Templates: program.md, eval harness, evaluator scripts
-  analyzer.py      — Heuristic repo analysis (tech stack, file classification)
-  initializer.py   — Generates .autoimprove/ artifacts
-  evaluator.py     — Evaluation scoring + baseline comparison
+  config.py        — Constants and helpers for status command
+  prompts.py       — INSTRUCTIONS.md content (the core product)
+  initializer.py   — Creates scaffold and writes INSTRUCTIONS.md
+  analyzer.py      — Stub (analysis is now agent-driven)
+  evaluator.py     — Re-exports for backwards compat
 ```
 
 ## Dependencies
 
-Minimal by design:
-
-- `click` — CLI framework
-- `pydantic` — config validation
-- `pyyaml` — config serialization
-
-No LLM client libraries. No API keys. No network calls.
+Minimal by design: `click`, `pyyaml`. No pydantic, no LLM libraries, no network calls.
 
 ## License
 

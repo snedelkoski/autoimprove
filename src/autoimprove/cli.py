@@ -1,13 +1,12 @@
 """CLI entry point for autoimprove.
 
 Usage:
-    autoimprove init <path>     Initialize a repo for self-improvement
-    autoimprove status <path>   Show current improvement status
+    autoimprove init <path>     Scaffold .autoimprove/ with INSTRUCTIONS.md
+    autoimprove status <path>   Show improvement progress
 """
 
 from __future__ import annotations
 
-import logging
 import sys
 from pathlib import Path
 
@@ -16,34 +15,28 @@ import click
 from autoimprove import __version__
 from autoimprove.config import (
     AUTOIMPROVE_DIR,
+    INSTRUCTIONS_FILE,
     RESULTS_FILE,
+    load_baseline,
     load_config,
 )
-
-
-def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
 
 @click.group()
 @click.version_option(version=__version__, prog_name="autoimprove")
 def main():
-    """Universal autonomous self-improvement for any software repo.
+    """Autonomous self-improvement for any software repo.
 
-    Analyzes a repository, generates evaluation harnesses, and produces
-    a program.md that guides an AI coding agent through an infinite
+    Creates an instruction document that a coding agent reads to analyze
+    your repository, design evaluation metrics, and run an infinite
     improvement loop.
 
-    Inspired by karpathy/autoresearch — but for ANY repo, not just ML training.
+    Inspired by karpathy/autoresearch — generalized to any codebase.
 
     Usage:
-        1. Run: autoimprove init ./my-repo
-        2. Tell your coding agent: "read .autoimprove/program.md and start improving"
+        1. autoimprove init ./my-repo
+        2. Tell your coding agent: "read .autoimprove/INSTRUCTIONS.md and
+           set up the improvement program"
     """
     pass
 
@@ -51,15 +44,14 @@ def main():
 @main.command()
 @click.argument("path", type=click.Path(exists=True, file_okay=False, dir_okay=True))
 @click.option("--force", is_flag=True, help="Overwrite existing .autoimprove/ directory")
-@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-def init(path: str, force: bool, verbose: bool):
+def init(path: str, force: bool):
     """Initialize a repository for autonomous self-improvement.
 
-    Analyzes the repo at PATH, detects its tech stack, generates evaluation
-    harnesses, and creates the .autoimprove/ directory with all necessary artifacts.
+    Creates .autoimprove/ with INSTRUCTIONS.md — a detailed guide for your
+    coding agent to analyze the repo, design evaluators, write program.md,
+    and run the improvement loop.
 
-    No API keys or LLM setup needed — all detection is heuristic-based.
-    The coding agent refines the artifacts with its own intelligence.
+    No API keys, no LLM calls, no heuristics. The agent does the thinking.
 
     Examples:
 
@@ -67,8 +59,6 @@ def init(path: str, force: bool, verbose: bool):
 
         autoimprove init /path/to/repo --force
     """
-    _setup_logging(verbose)
-
     repo_path = Path(path).resolve()
 
     try:
@@ -79,9 +69,6 @@ def init(path: str, force: bool, verbose: bool):
         sys.exit(1)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
-        if verbose:
-            import traceback
-            traceback.print_exc()
         sys.exit(1)
 
 
@@ -90,14 +77,12 @@ def init(path: str, force: bool, verbose: bool):
 def status(path: str):
     """Show current improvement status for a repo.
 
-    Displays experiment history, scores, and progress for the repo at PATH.
+    Reads results.tsv, baseline, and config to display progress.
 
     Examples:
 
         autoimprove status ./my-project
     """
-    _setup_logging(False)
-
     repo_path = Path(path).resolve()
     ai_dir = repo_path / AUTOIMPROVE_DIR
 
@@ -105,43 +90,63 @@ def status(path: str):
         click.echo(f"Not initialized. Run 'autoimprove init {repo_path}' first.")
         sys.exit(1)
 
-    try:
-        config = load_config(repo_path)
-    except FileNotFoundError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    # Check what artifacts exist
+    has_instructions = (ai_dir / INSTRUCTIONS_FILE).exists()
+    has_program = (ai_dir / "program.md").exists()
+    has_config = (ai_dir / "config.yaml").exists()
+    has_evaluators = (ai_dir / "evaluators").exists() and any(
+        (ai_dir / "evaluators").glob("*.py")
+    )
 
-    # Load baseline
-    from autoimprove.evaluator import load_baseline
+    config = load_config(repo_path)
     baseline = load_baseline(repo_path)
 
     # Read results
     results_path = ai_dir / RESULTS_FILE
+    experiments: list[str] = []
     if results_path.exists():
         lines = results_path.read_text().strip().splitlines()
         experiments = lines[1:] if len(lines) > 1 else []
-    else:
-        experiments = []
 
-    # Parse results
-    kept = sum(1 for e in experiments if "\tkeep\t" in e)
-    discarded = sum(1 for e in experiments if "\tdiscard\t" in e)
-    crashed = sum(1 for e in experiments if "\tcrash\t" in e)
-
+    # Display status
     click.echo(f"Repository: {repo_path}")
-    click.echo(f"Tech stack: {', '.join(config.tech_stack.languages)} | "
-               f"{', '.join(config.tech_stack.frameworks)}")
-    click.echo(f"Test command: {config.tech_stack.test_command or '(none)'}")
-    click.echo(f"Evaluators: {len(config.evaluators)}")
-    click.echo(f"Mutable patterns: {', '.join(config.file_classification.mutable_patterns)}")
+    click.echo()
+
+    # Setup progress
+    click.echo("Setup:")
+    click.echo(f"  INSTRUCTIONS.md: {'yes' if has_instructions else 'no'}")
+    click.echo(f"  program.md:      {'yes' if has_program else 'not yet'}")
+    click.echo(f"  config.yaml:     {'yes' if has_config else 'not yet'}")
+    click.echo(f"  evaluators:      {'yes' if has_evaluators else 'not yet'}")
+
+    if config:
+        summary = config.get("summary", "")
+        tech = config.get("tech_stack", {})
+        lang = tech.get("language", "")
+        if summary:
+            click.echo(f"\n  Summary: {summary}")
+        if lang:
+            click.echo(f"  Language: {lang}")
+
     click.echo()
 
     if baseline:
         click.echo(f"Baseline score: {baseline.get('composite_score', 0):.6f}")
+        evaluators = baseline.get("evaluators", [])
+        for ev in evaluators:
+            name = ev.get("name", "?")
+            score = ev.get("score", 0)
+            weight = ev.get("weight", 1.0)
+            click.echo(f"  {name}: {score:.4f} (weight={weight})")
     else:
         click.echo("Baseline: not yet established")
 
-    click.echo(f"Experiments: {len(experiments)} total "
+    # Parse experiment results
+    kept = sum(1 for e in experiments if "\tkeep\t" in e)
+    discarded = sum(1 for e in experiments if "\tdiscard\t" in e)
+    crashed = sum(1 for e in experiments if "\tcrash\t" in e)
+
+    click.echo(f"\nExperiments: {len(experiments)} total "
                f"({kept} kept, {discarded} discarded, {crashed} crashed)")
 
     if experiments:
@@ -149,7 +154,7 @@ def status(path: str):
         for exp in experiments[-10:]:
             click.echo(f"  {exp}")
 
-    # Show best score from results
+    # Best score
     best_score = 0.0
     for exp in experiments:
         parts = exp.split("\t")

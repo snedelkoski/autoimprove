@@ -1,114 +1,88 @@
 """Tests for autoimprove config module."""
 
+import json
 from pathlib import Path
 
 import pytest
 
 from autoimprove.config import (
     AUTOIMPROVE_DIR,
-    EvaluatorConfig,
-    FileClassification,
-    ProjectConfig,
-    TechStack,
+    BASELINE_DIR,
+    BASELINE_FILE,
+    CONFIG_FILE,
+    EVAL_HARNESS_FILE,
+    EVALUATORS_DIR,
+    EXPERIMENTS_DIR,
+    INSTRUCTIONS_FILE,
+    PROGRAM_FILE,
+    RESULTS_FILE,
     get_autoimprove_dir,
-    get_config_path,
+    load_baseline,
     load_config,
 )
 
 
-class TestTechStack:
-    def test_defaults(self):
-        ts = TechStack()
-        assert ts.languages == []
-        assert ts.frameworks == []
-        assert ts.test_command == ""
+class TestConstants:
+    def test_autoimprove_dir(self):
+        assert AUTOIMPROVE_DIR == ".autoimprove"
 
-    def test_from_dict(self):
-        ts = TechStack(
-            languages=["python"],
-            frameworks=["fastapi"],
-            test_command="uv run pytest",
+    def test_instructions_file(self):
+        assert INSTRUCTIONS_FILE == "INSTRUCTIONS.md"
+
+    def test_config_file(self):
+        assert CONFIG_FILE == "config.yaml"
+
+    def test_program_file(self):
+        assert PROGRAM_FILE == "program.md"
+
+    def test_results_file(self):
+        assert RESULTS_FILE == "results.tsv"
+
+
+class TestGetAutoimproveDir:
+    def test_from_string(self):
+        result = get_autoimprove_dir("/some/repo")
+        assert result == Path("/some/repo/.autoimprove")
+
+    def test_from_path(self):
+        result = get_autoimprove_dir(Path("/some/repo"))
+        assert result == Path("/some/repo/.autoimprove")
+
+
+class TestLoadBaseline:
+    def test_missing_returns_none(self, tmp_path):
+        assert load_baseline(tmp_path) is None
+
+    def test_valid_json(self, tmp_path):
+        baseline_dir = tmp_path / ".autoimprove" / "baselines"
+        baseline_dir.mkdir(parents=True)
+        data = {"composite_score": 0.85, "evaluators": []}
+        (baseline_dir / "baseline.json").write_text(json.dumps(data))
+
+        result = load_baseline(tmp_path)
+        assert result is not None
+        assert result["composite_score"] == 0.85
+
+    def test_invalid_json_returns_none(self, tmp_path):
+        baseline_dir = tmp_path / ".autoimprove" / "baselines"
+        baseline_dir.mkdir(parents=True)
+        (baseline_dir / "baseline.json").write_text("not json")
+
+        assert load_baseline(tmp_path) is None
+
+
+class TestLoadConfig:
+    def test_missing_returns_none(self, tmp_path):
+        assert load_config(tmp_path) is None
+
+    def test_valid_yaml(self, tmp_path):
+        config_dir = tmp_path / ".autoimprove"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.yaml").write_text(
+            "version: '1.0'\nrepo: test\nsummary: a test project\n"
         )
-        assert "python" in ts.languages
-        assert ts.test_command == "uv run pytest"
 
-
-class TestFileClassification:
-    def test_defaults(self):
-        fc = FileClassification()
-        assert fc.mutable_patterns == []
-        assert fc.protected_patterns == []
-
-
-class TestEvaluatorConfig:
-    def test_defaults(self):
-        ec = EvaluatorConfig(name="test_eval", script="test_eval.py")
-        assert ec.weight == 1.0
-        assert ec.timeout == 300
-        assert ec.enabled is True
-
-
-class TestProjectConfig:
-    def test_save_and_load(self, tmp_path):
-        config = ProjectConfig(
-            repo_path="/tmp/test-repo",
-            repo_summary="A test project",
-            tech_stack=TechStack(
-                languages=["python"],
-                test_command="pytest",
-            ),
-            file_classification=FileClassification(
-                mutable_patterns=["src/**/*.py"],
-                protected_patterns=["tests/**"],
-            ),
-            evaluators=[
-                EvaluatorConfig(
-                    name="complexity",
-                    script="complexity.py",
-                    weight=1.5,
-                ),
-            ],
-        )
-
-        config_path = tmp_path / "config.yaml"
-        config.save(config_path)
-
-        assert config_path.exists()
-
-        loaded = ProjectConfig.load(config_path)
-        assert loaded.repo_path == "/tmp/test-repo"
-        assert loaded.repo_summary == "A test project"
-        assert loaded.tech_stack.languages == ["python"]
-        assert loaded.tech_stack.test_command == "pytest"
-        assert len(loaded.evaluators) == 1
-        assert loaded.evaluators[0].name == "complexity"
-        assert loaded.evaluators[0].weight == 1.5
-
-    def test_save_creates_parent_dirs(self, tmp_path):
-        config = ProjectConfig(repo_path="/tmp/test")
-        config_path = tmp_path / "deep" / "nested" / "config.yaml"
-        config.save(config_path)
-        assert config_path.exists()
-
-    def test_version_defaults_to_0_2_0(self):
-        config = ProjectConfig(repo_path="/tmp/test")
-        assert config.version == "0.2.0"
-
-    def test_no_llm_config(self):
-        """Verify LLMConfig is no longer part of ProjectConfig."""
-        config = ProjectConfig(repo_path="/tmp/test")
-        assert not hasattr(config, "llm")
-
-
-class TestHelpers:
-    def test_get_autoimprove_dir(self):
-        result = get_autoimprove_dir("/tmp/test-repo")
-        assert result == Path("/tmp/test-repo/.autoimprove")
-
-    def test_get_config_path(self):
-        result = get_config_path("/tmp/test-repo")
-        assert result == Path("/tmp/test-repo/.autoimprove/config.yaml")
-
-    def test_load_config_missing_raises(self, tmp_path):
-        with pytest.raises(FileNotFoundError, match="Not an autoimprove repo"):
-            load_config(tmp_path)
+        result = load_config(tmp_path)
+        assert result is not None
+        assert result["version"] == "1.0"
+        assert result["repo"] == "test"

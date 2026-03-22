@@ -1,994 +1,374 @@
-"""Templates for autoimprove.
+"""The instruction document for autoimprove.
 
-Contains the program.md template (agent instructions), the evaluation
-harness script, and evaluator script templates for common tech stacks.
+This is the entire product. When `autoimprove init` runs, it writes this
+document into .autoimprove/INSTRUCTIONS.md. A coding agent reads it, analyzes
+the repository, and creates all the artifacts needed for autonomous
+self-improvement.
 
-No LLM prompts — this tool is designed to be run BY a coding agent
-(Claude Code, OpenCode, Copilot, etc.) which IS the LLM.
+No templates, no heuristics, no LLM API calls. The agent IS the intelligence.
 """
 
-# ---------------------------------------------------------------------------
-# program.md template — the agent instruction document
-# ---------------------------------------------------------------------------
-
-PROGRAM_MD_TEMPLATE = """\
+INSTRUCTIONS_MD = """\
 # autoimprove
 
-Autonomous self-improvement program for **{repo_name}**.
+You are setting up an autonomous self-improvement program for **{repo_name}**.
 
-> {repo_summary}
+This document tells you how to analyze the repository, build an evaluation
+system, write the improvement program, and run the loop. Follow it
+sequentially — each phase produces artifacts the next phase depends on.
 
-## Setup
+---
 
-To set up a new improvement session:
+## Phase 1 — Understand the Repository
 
-1. **Read this file** for full context on the repo and the experiment loop.
-2. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar5`). \
-The branch `autoimprove/<tag>` must not already exist.
-3. **Create the branch**: `git checkout -b autoimprove/<tag>` from current main/master.
-4. **Read the in-scope files**: Familiarize yourself with the codebase structure:
-   - This `program.md` — your mission and constraints.
-   - `.autoimprove/config.yaml` — detected tech stack, file classification, evaluators.
-   - `.autoimprove/eval_harness.py` — the fixed evaluation script. **Do not modify.**
-   - `.autoimprove/evaluators/` — individual evaluator scripts. **Do not modify.**
-5. **Verify baseline**: Check that `.autoimprove/baselines/baseline.json` exists. \
-If not, run `uv run .autoimprove/eval_harness.py` to establish baseline.
-6. **Initialize results.tsv** if it only has the header row. The baseline will be \
-recorded after the first run.
-7. **Confirm and go**: Confirm setup looks good, then start experimenting.
+Read these files (skip any that don't exist):
 
-## Tech Stack
+1. `README.md` / `README.rst` — what the project does, how to use it.
+2. `AGENTS.md` / `CLAUDE.md` / `CURSORRULES` / `.github/copilot-instructions.md` — \
+developer guidelines, architecture notes, conventions. These are gold — they tell you \
+what the maintainers care about.
+3. The main config file — `pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, \
+`Gemfile`, `pom.xml`, `build.gradle`. This tells you the language, dependencies, \
+build commands, and test setup.
+4. Browse the source tree. For every source file, note its name and purpose in one line.
 
-- **Languages**: {languages}
-- **Frameworks**: {frameworks}
-- **Package manager**: {package_manager}
-- **Build system**: {build_system}
-- **Test framework**: {test_framework}
-- **Test command**: `{test_command}`
-- **Build command**: `{build_command}`
-- **Run command**: `{run_command}`
+After reading, answer these questions (write the answers into `.autoimprove/analysis.md` \
+so you can reference them later):
 
-## What You CAN Do
+- **What does this project do?** One paragraph.
+- **File map**: every source file with a one-line description. Example:
+  ```
+  model.py        — Transformer architecture + sklearn-compatible wrappers
+  train.py        — Training loop (offline HDF5 or online generation)
+  generate_data.py — SCM-based synthetic data generation
+  evaluate.py     — Evaluation: sklearn quick-eval + TabArena benchmark
+  ```
+- **Tech stack**: language, framework, package manager, test runner.
+- **How to build**: exact shell command (e.g. `cargo build`, `npm run build`, or "N/A").
+- **How to test**: exact shell command (e.g. `uv run pytest`, `npm test`).
+- **How to run**: exact shell command if applicable.
+- **Editable files**: which files contain the core logic the agent should improve. \
+List them explicitly by name — not glob patterns. If there are many (>20), group by \
+directory.
+- **Fixed files**: which files must NOT be modified — tests, CI, configs, lock files, \
+`.autoimprove/` itself. Be explicit.
+- **Current quality issues**: what you observe — missing tests, type annotation gaps, \
+lint violations, high complexity functions, dead code, poor error handling, etc.
 
-- Modify files matching these patterns (the "mutable surface area"):
-{mutable_patterns_list}
-- Refactor, optimize, simplify, improve error handling, add type annotations, \
-improve performance, reduce complexity — anything that improves the evaluation scores.
+---
 
-## What You CANNOT Do
+## Phase 2 — Design the Evaluation System
 
-- Modify protected files (tests, CI, configs, docs, lock files, evaluation scripts):
-{protected_patterns_list}
-- Install new dependencies or modify package manifests.
-- Modify anything in `.autoimprove/` — the eval harness and evaluators are fixed.
-- Modify tests — they are the ground truth.
+You need two things: individual **evaluator scripts** and an **eval harness** that runs \
+them all and computes a composite score.
 
-## Evaluation
+### 2a. Evaluator Scripts
 
-The evaluation harness measures software quality across multiple dimensions. Run it:
+Create self-contained Python scripts in `.autoimprove/evaluators/`. Each one measures \
+one dimension of code quality.
 
-```bash
-uv run .autoimprove/eval_harness.py
-```
+**Requirements for every evaluator script:**
 
-It outputs JSON with a composite score (0.0-1.0, higher is better) and per-evaluator scores:
-
-```json
-{{
-  "composite_score": 0.85,
-  "elapsed_seconds": 12.3,
-  "evaluators": [
-    {{"name": "test_suite", "score": 1.0, "weight": 3.0, ...}},
-    {{"name": "code_complexity", "score": 0.7, "weight": 1.0, ...}},
-    ...
-  ]
-}}
-```
-
-### Evaluators
-
-{evaluator_descriptions}
-
-The composite score is a weighted average. **The test suite has the highest weight** \
-(3.0) — never break the tests.
-
-## The Experiment Loop
-
-LOOP FOREVER:
-
-1. Look at the current state of the codebase and evaluation scores.
-2. Come up with a specific, focused improvement to try.
-3. `git commit` the change.
-4. Run the evaluation: `uv run .autoimprove/eval_harness.py > .autoimprove/run.log 2>&1`
-5. Read the results: check the composite_score from `.autoimprove/run.log`
-6. If the eval crashed, read the log to understand why. Try to fix if it's a simple \
-bug. If the approach is fundamentally broken, give up on it.
-7. Record the results in `.autoimprove/results.tsv`
-8. If composite_score **improved** (higher than baseline), KEEP the commit and update \
-the baseline.
-9. If composite_score is **equal or worse**, DISCARD the commit: \
-`git reset --hard HEAD~1`
-10. Go to step 1.
-
-## Logging Results
-
-Log every experiment to `.autoimprove/results.tsv` (tab-separated).
-
-The TSV has a header row and 4 columns:
-
-```
-experiment\tcomposite_score\tstatus\tdescription
-```
-
-1. experiment: short identifier (e.g. `exp_0001`, or git short hash)
-2. composite_score: the score achieved (e.g. `0.850000`) — use `0.000000` for crashes
-3. status: `keep`, `discard`, or `crash`
-4. description: short text describing what this experiment tried
-
-Example:
-
-```
-experiment\tcomposite_score\tstatus\tdescription
-a1b2c3d\t0.850000\tkeep\tbaseline
-b2c3d4e\t0.870000\tkeep\treduced cyclomatic complexity in parser.py
-c3d4e5f\t0.830000\tdiscard\taggressively inlined utility functions
-d4e5f6g\t0.000000\tcrash\trefactored imports (circular dependency)
-```
-
-## Strategy
-
-**The goal: maximize the composite evaluation score.**
-
-The simplicity criterion: all else being equal, simpler is better. A small improvement \
-that adds ugly complexity is not worth it. Conversely, removing code and getting equal \
-or better results is a great outcome — that's a simplification win. When evaluating \
-whether to keep a change, weigh the complexity cost against the improvement magnitude.
-
-Good experiment ideas:
-- Reduce cyclomatic complexity in complex functions
-- Add missing type annotations
-- Improve error handling (replace bare excepts, add specific exception types)
-- Remove dead code
-- Simplify overly nested logic
-- Extract helper functions for readability
-- Fix lint warnings
-- Improve documentation/docstrings
-- Optimize hot paths (if benchmarks exist)
-
-**Crashes**: If a run crashes, use your judgment. If it's a typo or missing import, \
-fix it and re-run. If the idea itself is broken, log "crash" and move on.
-
-**NEVER STOP**: Once the experiment loop begins, do NOT pause to ask the human if you \
-should continue. The human might be away and expects you to work **indefinitely** until \
-manually stopped. If you run out of ideas, think harder — re-read the source code, \
-try combining previous near-misses, try more radical approaches. The loop runs until \
-the human interrupts you.
-"""
-
-# ---------------------------------------------------------------------------
-# Eval harness template
-# ---------------------------------------------------------------------------
-
-EVAL_HARNESS_TEMPLATE = '''\
+```python
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = [
-#     "pyyaml>=6.0",
-# ]
+# dependencies = ["<any-deps>"]
 # ///
-"""
-autoimprove evaluation harness.
+\"\"\"<What this evaluator measures>.\"\"\"
 
-This is the fixed evaluation entry point — analogous to prepare.py in autoresearch.
-It runs all evaluators and produces a composite score.
+# ... measurement logic ...
 
-DO NOT MODIFY THIS FILE. It is managed by autoimprove.
+# MUST print exactly one JSON line to stdout:
+print(json.dumps({{
+    "name": "<evaluator_name>",
+    "score": 0.0,  # float in [0.0, 1.0] — higher is better
+    "details": {{   # arbitrary dict with diagnostic info
+        "violations": 3,
+        "files_checked": 12,
+        # ... anything useful for the agent to understand the score
+    }},
+}}))
+```
 
-Usage:
-    uv run .autoimprove/eval_harness.py
-"""
+- Use [PEP 723](https://peps.python.org/pep-0723/) inline metadata so they run \
+standalone via `uv run .autoimprove/evaluators/<name>.py`.
+- Each script MUST be independent — no imports from the project, no shared state.
+- Output exactly one JSON line. Nothing else on stdout.
+- Exit 0 on success. Non-zero exit = score 0.0.
+
+**Choose evaluators relevant to this project.** Common ones:
+
+| Evaluator | What it measures | Typical weight | When to use |
+|-----------|-----------------|---------------|-------------|
+| `test_suite` | Test pass rate | 3.0 | Always (if tests exist or should exist) |
+| `lint` | Linter violations (ruff, eslint, clippy) | 1.5 | Always |
+| `type_coverage` | Type annotation completeness | 1.0 | Typed languages |
+| `complexity` | Cyclomatic complexity | 1.0 | Large codebases |
+| `test_coverage` | Line/branch coverage | 2.0 | If coverage tooling exists |
+| `build` | Clean build with no warnings | 2.0 | Compiled languages |
+| `benchmark` | Performance on project's own benchmarks | 3.0 | If benchmarks exist |
+| `doc_coverage` | Docstring/JSDoc coverage | 0.5 | Libraries/APIs |
+
+You don't have to use these exact names or definitions. **Design evaluators that \
+capture what actually matters for this specific project.** An ML training repo might \
+have a `val_loss` evaluator. An API might have a `response_time` evaluator. A compiler \
+might have a `correctness` evaluator that runs a test suite of programs.
+
+**Weight guidelines**: The test suite should usually be the highest weight. An evaluator \
+that can be gamed trivially (e.g. just adding `# type: ignore` everywhere to "fix" type \
+errors) should have a lower weight. Evaluators that measure real correctness or \
+performance should be weighted highest.
+
+### 2b. Eval Harness
+
+Create `.autoimprove/eval_harness.py` — the master evaluation script. It:
+
+1. Discovers all `*.py` files in `.autoimprove/evaluators/` (skip `_`-prefixed files).
+2. Runs each via `uv run .autoimprove/evaluators/<name>.py` with a timeout.
+3. Parses the JSON output line.
+4. Computes a weighted-average composite score.
+5. Prints the final result as JSON to stdout.
+
+**Reference implementation** (adapt as needed):
+
+```python
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+\"\"\"
+autoimprove eval harness — runs all evaluators, computes composite score.
+DO NOT MODIFY after baseline is established.
+
+Usage: uv run .autoimprove/eval_harness.py
+\"\"\"
 
 import json
-import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
-import yaml
 
-
-def run_evaluator(script_path: Path, repo_root: Path, timeout: int) -> dict:
-    """Run a single evaluator script and return its result."""
+def run_evaluator(script: Path, cwd: Path, timeout: int = 120) -> dict:
     try:
-        result = subprocess.run(
-            ["uv", "run", str(script_path)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(repo_root),
+        r = subprocess.run(
+            ["uv", "run", str(script)],
+            capture_output=True, text=True, timeout=timeout, cwd=str(cwd),
         )
-        if result.returncode != 0:
-            return {
-                "name": script_path.stem,
-                "score": 0.0,
-                "details": {
-                    "error": f"Evaluator exited with code {result.returncode}",
-                    "stderr": result.stderr[-500:] if result.stderr else "",
-                },
-            }
-        # Parse last JSON line from stdout
-        for line in reversed(result.stdout.strip().splitlines()):
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    return json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-        return {
-            "name": script_path.stem,
-            "score": 0.0,
-            "details": {"error": "No valid JSON output from evaluator", "stdout": result.stdout[-500:]},
-        }
+        if r.returncode != 0:
+            return {{"name": script.stem, "score": 0.0,
+                    "details": {{"error": f"exit {{r.returncode}}",
+                               "stderr": r.stderr[-500:]}}}}
+        for line in reversed(r.stdout.strip().splitlines()):
+            if line.strip().startswith("{{"):
+                return json.loads(line)
+        return {{"name": script.stem, "score": 0.0,
+                "details": {{"error": "no JSON output"}}}}
     except subprocess.TimeoutExpired:
-        return {
-            "name": script_path.stem,
-            "score": 0.0,
-            "details": {"error": f"Evaluator timed out after {timeout}s"},
-        }
+        return {{"name": script.stem, "score": 0.0,
+                "details": {{"error": f"timeout after {{timeout}}s"}}}}
     except Exception as e:
-        return {
-            "name": script_path.stem,
-            "score": 0.0,
-            "details": {"error": str(e)},
-        }
-
-
-def run_test_suite(test_command: str, repo_root: Path, timeout: int = 300) -> dict:
-    """Run the repo's own test suite and return pass rate as score."""
-    if not test_command:
-        return {
-            "name": "test_suite",
-            "score": 1.0,
-            "details": {"info": "No test command configured, assuming pass"},
-        }
-    try:
-        result = subprocess.run(
-            test_command.split(),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(repo_root),
-        )
-        passed = result.returncode == 0
-        return {
-            "name": "test_suite",
-            "score": 1.0 if passed else 0.0,
-            "details": {
-                "passed": passed,
-                "returncode": result.returncode,
-                "stdout_tail": result.stdout[-1000:] if result.stdout else "",
-                "stderr_tail": result.stderr[-500:] if result.stderr else "",
-            },
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "name": "test_suite",
-            "score": 0.0,
-            "details": {"error": f"Test suite timed out after {timeout}s"},
-        }
-    except Exception as e:
-        return {
-            "name": "test_suite",
-            "score": 0.0,
-            "details": {"error": str(e)},
-        }
+        return {{"name": script.stem, "score": 0.0,
+                "details": {{"error": str(e)}}}}
 
 
 def main():
-    # Determine paths
-    harness_path = Path(__file__).resolve()
-    autoimprove_dir = harness_path.parent
-    repo_root = autoimprove_dir.parent
+    here = Path(__file__).resolve().parent
+    repo = here.parent
+    evaluators_dir = here / "evaluators"
 
-    # Load config
-    config_path = autoimprove_dir / "config.yaml"
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+    # Load weights from config if it exists, else default to 1.0
+    config_path = here / "config.yaml"
+    weights = {{}}
+    if config_path.exists():
+        import yaml  # only needed if config exists
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {{}}
+        for e in cfg.get("evaluators", []):
+            weights[e["name"]] = e.get("weight", 1.0)
 
-    t_start = time.time()
+    t0 = time.time()
     results = []
-    evaluator_configs = {e["name"]: e for e in config.get("evaluators", [])}
+    for script in sorted(evaluators_dir.glob("*.py")):
+        if script.name.startswith("_"):
+            continue
+        r = run_evaluator(script, repo)
+        r["weight"] = weights.get(r["name"], 1.0)
+        results.append(r)
 
-    # 1. Run the project's own test suite (weight = 3.0, highest priority)
-    test_command = config.get("tech_stack", {}).get("test_command", "")
-    test_result = run_test_suite(test_command, repo_root)
-    test_result["weight"] = 3.0
-    results.append(test_result)
+    total_w = sum(r["weight"] for r in results)
+    composite = sum(r["score"] * r["weight"] for r in results) / total_w if total_w else 0.0
 
-    # 2. Run each custom evaluator
-    evaluators_dir = autoimprove_dir / "evaluators"
-    if evaluators_dir.exists():
-        for script_path in sorted(evaluators_dir.glob("*.py")):
-            if script_path.name.startswith("_"):
-                continue
-            econf = evaluator_configs.get(script_path.stem, {})
-            if not econf.get("enabled", True):
-                continue
-            timeout = econf.get("timeout", 120)
-            result = run_evaluator(script_path, repo_root, timeout)
-            result["weight"] = econf.get("weight", 1.0)
-            results.append(result)
-
-    # 3. Compute composite score
-    total_weight = sum(r["weight"] for r in results)
-    if total_weight > 0:
-        composite = sum(r["score"] * r["weight"] for r in results) / total_weight
-    else:
-        composite = 0.0
-
-    elapsed = time.time() - t_start
-
-    # Output
-    output = {
+    print(json.dumps({{
         "composite_score": round(composite, 6),
-        "elapsed_seconds": round(elapsed, 1),
+        "elapsed_seconds": round(time.time() - t0, 1),
         "evaluators": results,
-    }
-    print(json.dumps(output, indent=2))
+    }}, indent=2))
 
 
 if __name__ == "__main__":
     main()
-'''
+```
 
-# ---------------------------------------------------------------------------
-# Evaluator script templates
-#
-# Each template is a complete, self-contained Python script with PEP 723
-# inline metadata. They run via `uv run evaluators/<name>.py` and output
-# a single JSON line: {"name": "...", "score": 0.0-1.0, "details": {...}}
-# ---------------------------------------------------------------------------
+You may modify this reference implementation to fit the project. For example, if the \
+project has a long-running benchmark, increase the timeout. If you want to print a \
+human-readable summary in addition to JSON, add it to stderr (not stdout).
 
-EVALUATOR_TEMPLATES: dict[str, str] = {}
+**Important:** Once you establish the baseline, the eval harness becomes fixed — do not \
+modify it during the improvement loop. It is the "ground truth" (like `prepare.py` in \
+autoresearch). If you modify it, you invalidate all previous scores.
 
-# --- Test suite evaluator ---
-EVALUATOR_TEMPLATES["test_suite"] = '''\
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
+---
+
+## Phase 3 — Write `program.md`
+
+Create `.autoimprove/program.md` — the document the agent reads at the start of each \
+improvement session. This is the most important artifact. It must be **specific to this \
+repository**, not generic.
+
+### What makes a great program.md
+
+Study this example from [karpathy/autoresearch](https://github.com/karpathy/autoresearch). \
+Notice how every detail is concrete:
+
+- Files are named explicitly: "Read `prepare.py` — fixed constants... `train.py` — \
+the file you modify."
+- Commands are exact: `uv run train.py > run.log 2>&1`
+- Output format is shown verbatim: the `val_bpb: 0.997900` block
+- Strategy is specific: "A 0.001 val_bpb improvement that adds 20 lines of hacky code? \
+Probably not worth it."
+- The TSV schema has real example rows with real-looking values.
+
+Your program.md must have this level of specificity. **Never use glob patterns when you \
+can list files by name. Never use placeholder values when you can use real baseline \
+numbers. Never describe a command abstractly when you can write the exact shell line.**
+
+### Required sections
+
+**1. Setup** — Step-by-step checklist for starting a new session:
+- Create branch `autoimprove/<tag>` (tag = today's date, e.g. `jun15`)
+- Read specific files (list them by name with one-line descriptions)
+- Verify baseline exists
+- Confirm and go
+
+**2. Scope** — What the agent can and cannot modify:
+- "What you CAN do" — list the editable files by name. For each file, one line saying \
+what it contains and what kind of changes are fair game.
+- "What you CANNOT do" — list protected files/dirs. Explain why (tests are ground truth, \
+configs control the build, .autoimprove/ is the evaluation system).
+
+**3. Evaluation** — How to run the eval and what the output looks like:
+- The exact command: `uv run .autoimprove/eval_harness.py`
+- The exact output format (paste the actual baseline JSON, or a representative example)
+- What each evaluator measures, its weight, and its current baseline score
+- A quick command to extract just the composite score from the log
+
+**4. The Experiment Loop** — The infinite loop, step by step:
+```
+LOOP FOREVER:
+1. Pick a focused improvement (one idea per experiment)
+2. Edit the code
+3. git commit -m "experiment: <description>"
+4. Run: uv run .autoimprove/eval_harness.py > .autoimprove/run.log 2>&1
+5. Read: cat .autoimprove/run.log (or extract composite_score)
+6. If crashed: read the error, try to fix, or abandon
+7. Log to results.tsv
+8. If improved: keep the commit, update baseline
+9. If not improved: git reset --hard HEAD~1
+10. GOTO 1
+```
+
+**5. Logging** — The results.tsv format:
+- Tab-separated, NOT comma-separated
+- Columns: `commit`, `composite_score`, `status`, `description`
+- Include 3-4 example rows with realistic values from this project's baseline
+
+**6. Strategy** — Prioritized improvement ideas based on the baseline:
+- Start with the highest-impact items. If tests score 0.0, that's #1.
+- Include specific targets: "Add return type annotations to these 12 functions in \
+model.py" is better than "improve type coverage."
+- The simplicity criterion: "All else equal, simpler is better. Removing code and \
+getting equal or better results is a great outcome."
+- Crash recovery: "If it's a typo, fix and re-run. If the idea is broken, log crash \
+and move on."
+
+**7. NEVER STOP** — The autonomy doctrine:
+```
+Once the loop begins, do NOT pause to ask the human if you should continue.
+Do NOT ask "should I keep going?" or "is this a good stopping point?".
+The human might be asleep. You are autonomous. If you run out of ideas,
+think harder — re-read the source code, try combining previous experiments,
+try more radical approaches. The loop runs until the human interrupts you.
+```
+
+---
+
+## Phase 4 — Write `config.yaml`
+
+Create `.autoimprove/config.yaml` with the project metadata and evaluator configuration. \
+The eval harness reads this for evaluator weights.
+
+```yaml
+version: "1.0"
+repo: {repo_name}
+summary: "<one-line project description>"
+
+tech_stack:
+  language: "<primary language>"
+  framework: "<primary framework or 'none'>"
+  package_manager: "<uv/npm/cargo/etc.>"
+  test_command: "<exact test command>"
+  build_command: "<exact build command or 'none'>"
+
+editable_files:
+  - "<file1.ext>  # one-line description"
+  - "<file2.ext>  # one-line description"
+
+protected_paths:
+  - "tests/"
+  - ".autoimprove/"
+  - "<other protected paths>"
+
+evaluators:
+  - name: "<evaluator_name>"
+    description: "<what it measures>"
+    weight: <float>
+    timeout: <seconds>
+```
+
+---
+
+## Phase 5 — Establish Baseline and Begin
+
+1. Run the evaluation:
+   ```bash
+   uv run .autoimprove/eval_harness.py
+   ```
+2. Save the output to `.autoimprove/baselines/baseline.json`.
+3. Record the baseline in `.autoimprove/results.tsv`:
+   ```
+   baseline\\t<composite_score>\\tkeep\\tbaseline — initial state
+   ```
+4. Go back to `program.md` and fill in the actual baseline scores everywhere you left \
+placeholders.
+5. Read your own `program.md` and start the improvement loop.
+
+---
+
+## Checklist
+
+Before starting the improvement loop, verify:
+
+- [ ] `.autoimprove/analysis.md` exists with your repo analysis
+- [ ] `.autoimprove/evaluators/` has at least one evaluator script
+- [ ] `.autoimprove/eval_harness.py` exists and runs successfully
+- [ ] `.autoimprove/config.yaml` exists with evaluator weights
+- [ ] `.autoimprove/program.md` exists with all sections filled in
+- [ ] `.autoimprove/baselines/baseline.json` exists with real scores
+- [ ] `.autoimprove/results.tsv` has the header row and baseline entry
+- [ ] `program.md` contains actual baseline numbers, not placeholders
+
+Everything ready? Read `program.md` and begin.
 """
-Test suite pass rate evaluator.
-Runs the project's test command and reports pass/fail as a 0.0/1.0 score.
-"""
-
-import json
-import subprocess
-import sys
-
-
-def main():
-    test_command = {test_command!r}
-    if not test_command:
-        print(json.dumps({{"name": "test_suite", "score": 1.0, "details": {{"info": "No test command"}}}}))
-        return
-
-    try:
-        result = subprocess.run(
-            test_command.split(),
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        passed = result.returncode == 0
-        print(json.dumps({{
-            "name": "test_suite",
-            "score": 1.0 if passed else 0.0,
-            "details": {{
-                "passed": passed,
-                "returncode": result.returncode,
-                "stdout_tail": result.stdout[-500:] if result.stdout else "",
-                "stderr_tail": result.stderr[-500:] if result.stderr else "",
-            }},
-        }}))
-    except subprocess.TimeoutExpired:
-        print(json.dumps({{"name": "test_suite", "score": 0.0, "details": {{"error": "timeout"}}}}))
-    except Exception as e:
-        print(json.dumps({{"name": "test_suite", "score": 0.0, "details": {{"error": str(e)}}}}))
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-# --- Python: code complexity (radon) ---
-EVALUATOR_TEMPLATES["code_complexity_python"] = '''\
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#     "radon>=6.0",
-# ]
-# ///
-"""
-Code complexity evaluator for Python projects.
-Measures average cyclomatic complexity using radon.
-
-Score: 1.0 = low complexity (avg CC <= 5), 0.0 = high complexity (avg CC >= 25).
-"""
-
-import json
-import os
-import sys
-from pathlib import Path
-
-from radon.complexity import cc_visit
-
-
-def find_python_files(root: Path) -> list[Path]:
-    """Find all Python source files, skipping tests and venvs."""
-    skip_dirs = {
-        ".git", "__pycache__", ".venv", "venv", "node_modules",
-        ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
-        ".autoimprove", "tests", "test", ".eggs",
-    }
-    files = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        for f in filenames:
-            if f.endswith(".py"):
-                files.append(Path(dirpath) / f)
-    return files
-
-
-def main():
-    root = Path(".")
-    py_files = find_python_files(root)
-
-    if not py_files:
-        print(json.dumps({
-            "name": "code_complexity",
-            "score": 1.0,
-            "details": {"info": "No Python source files found"},
-        }))
-        return
-
-    total_complexity = 0
-    total_blocks = 0
-    file_details = {}
-
-    for fpath in py_files:
-        try:
-            source = fpath.read_text(errors="replace")
-            blocks = cc_visit(source)
-            if blocks:
-                avg = sum(b.complexity for b in blocks) / len(blocks)
-                total_complexity += sum(b.complexity for b in blocks)
-                total_blocks += len(blocks)
-                file_details[str(fpath)] = {
-                    "avg_complexity": round(avg, 2),
-                    "num_blocks": len(blocks),
-                    "max_complexity": max(b.complexity for b in blocks),
-                }
-        except Exception:
-            pass
-
-    if total_blocks == 0:
-        avg_complexity = 0.0
-    else:
-        avg_complexity = total_complexity / total_blocks
-
-    # Score: CC 1-5 = 1.0, CC 25+ = 0.0, linear interpolation
-    score = max(0.0, min(1.0, 1.0 - (avg_complexity - 5) / 20))
-
-    # Show worst files
-    worst = sorted(file_details.items(), key=lambda x: -x[1]["avg_complexity"])[:5]
-
-    print(json.dumps({
-        "name": "code_complexity",
-        "score": round(score, 4),
-        "details": {
-            "avg_complexity": round(avg_complexity, 2),
-            "total_blocks": total_blocks,
-            "total_files": len(py_files),
-            "worst_files": dict(worst),
-        },
-    }))
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-# --- Python: type coverage (mypy) ---
-EVALUATOR_TEMPLATES["type_coverage_python"] = '''\
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#     "mypy>=1.0",
-# ]
-# ///
-"""
-Type annotation coverage evaluator for Python projects.
-Uses mypy to check how many functions/methods have type annotations.
-
-Score: fraction of functions with complete type annotations (0.0-1.0).
-"""
-
-import ast
-import json
-import os
-import sys
-from pathlib import Path
-
-
-def find_python_files(root: Path) -> list[Path]:
-    """Find all Python source files, skipping tests and venvs."""
-    skip_dirs = {
-        ".git", "__pycache__", ".venv", "venv", "node_modules",
-        ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
-        ".autoimprove", "tests", "test", ".eggs",
-    }
-    files = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        for f in filenames:
-            if f.endswith(".py"):
-                files.append(Path(dirpath) / f)
-    return files
-
-
-def check_annotations(fpath: Path) -> tuple[int, int]:
-    """Count functions with and without return type annotations.
-
-    Returns (annotated_count, total_count).
-    """
-    try:
-        source = fpath.read_text(errors="replace")
-        tree = ast.parse(source)
-    except (SyntaxError, Exception):
-        return 0, 0
-
-    annotated = 0
-    total = 0
-
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            total += 1
-            # Check if return annotation exists
-            has_return = node.returns is not None
-            # Check if all args (except self/cls) have annotations
-            args = node.args
-            all_args = args.args + args.posonlyargs + args.kwonlyargs
-            param_names_to_skip = {"self", "cls"}
-            has_all_params = all(
-                arg.annotation is not None
-                for arg in all_args
-                if arg.arg not in param_names_to_skip
-            )
-            if has_return and has_all_params:
-                annotated += 1
-
-    return annotated, total
-
-
-def main():
-    root = Path(".")
-    py_files = find_python_files(root)
-
-    if not py_files:
-        print(json.dumps({
-            "name": "type_coverage",
-            "score": 1.0,
-            "details": {"info": "No Python source files found"},
-        }))
-        return
-
-    total_annotated = 0
-    total_functions = 0
-
-    for fpath in py_files:
-        annotated, total = check_annotations(fpath)
-        total_annotated += annotated
-        total_functions += total
-
-    if total_functions == 0:
-        score = 1.0
-    else:
-        score = total_annotated / total_functions
-
-    print(json.dumps({
-        "name": "type_coverage",
-        "score": round(score, 4),
-        "details": {
-            "annotated_functions": total_annotated,
-            "total_functions": total_functions,
-            "total_files": len(py_files),
-        },
-    }))
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-# --- Python: lint score (ruff) ---
-EVALUATOR_TEMPLATES["lint_python"] = '''\
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#     "ruff>=0.4.0",
-# ]
-# ///
-"""
-Lint score evaluator for Python projects.
-Uses ruff to count lint violations and compute a quality score.
-
-Score: 1.0 = no violations, decreases as violations increase.
-"""
-
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-
-def count_python_lines(root: Path) -> int:
-    """Count total lines of Python source code."""
-    skip_dirs = {
-        ".git", "__pycache__", ".venv", "venv", "node_modules",
-        ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
-        ".autoimprove", "tests", "test", ".eggs",
-    }
-    total = 0
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        for f in filenames:
-            if f.endswith(".py"):
-                try:
-                    total += len(Path(dirpath, f).read_text(errors="replace").splitlines())
-                except OSError:
-                    pass
-    return total
-
-
-def main():
-    root = Path(".")
-
-    try:
-        result = subprocess.run(
-            ["ruff", "check", ".", "--output-format=json", "--quiet"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=str(root),
-        )
-        # ruff outputs JSON array of violations
-        try:
-            violations = json.loads(result.stdout) if result.stdout.strip() else []
-        except json.JSONDecodeError:
-            violations = []
-
-        num_violations = len(violations)
-        total_lines = count_python_lines(root)
-
-        if total_lines == 0:
-            score = 1.0
-        else:
-            # Score: violations per 100 lines. 0 violations = 1.0, 10+ per 100 lines = 0.0
-            violations_per_100 = (num_violations / total_lines) * 100
-            score = max(0.0, min(1.0, 1.0 - violations_per_100 / 10))
-
-        # Categorize violations
-        categories: dict[str, int] = {}
-        for v in violations:
-            code = v.get("code", "unknown")
-            categories[code] = categories.get(code, 0) + 1
-
-        # Top violation types
-        top_violations = sorted(categories.items(), key=lambda x: -x[1])[:10]
-
-        print(json.dumps({
-            "name": "lint_score",
-            "score": round(score, 4),
-            "details": {
-                "num_violations": num_violations,
-                "total_lines": total_lines,
-                "violations_per_100_lines": round((num_violations / max(total_lines, 1)) * 100, 2),
-                "top_violations": dict(top_violations),
-            },
-        }))
-
-    except FileNotFoundError:
-        print(json.dumps({
-            "name": "lint_score",
-            "score": 0.5,
-            "details": {"error": "ruff not found, install with: pip install ruff"},
-        }))
-    except subprocess.TimeoutExpired:
-        print(json.dumps({
-            "name": "lint_score",
-            "score": 0.0,
-            "details": {"error": "ruff timed out after 120s"},
-        }))
-    except Exception as e:
-        print(json.dumps({
-            "name": "lint_score",
-            "score": 0.0,
-            "details": {"error": str(e)},
-        }))
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-# --- JavaScript/TypeScript: lint score (eslint) ---
-EVALUATOR_TEMPLATES["lint_js"] = '''\
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
-"""
-Lint score evaluator for JavaScript/TypeScript projects.
-Uses eslint (must be installed in the project) to count violations.
-
-Score: 1.0 = no violations, decreases as violations increase.
-"""
-
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-
-def count_source_lines(root: Path) -> int:
-    """Count total lines of JS/TS source code."""
-    skip_dirs = {
-        ".git", "node_modules", "dist", "build", ".next", ".nuxt",
-        "coverage", ".autoimprove",
-    }
-    extensions = {".js", ".ts", ".jsx", ".tsx", ".mjs", ".mts"}
-    total = 0
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        for f in filenames:
-            if any(f.endswith(ext) for ext in extensions):
-                try:
-                    total += len(Path(dirpath, f).read_text(errors="replace").splitlines())
-                except OSError:
-                    pass
-    return total
-
-
-def main():
-    root = Path(".")
-
-    try:
-        result = subprocess.run(
-            ["npx", "eslint", ".", "--format=json", "--quiet"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=str(root),
-        )
-        try:
-            data = json.loads(result.stdout) if result.stdout.strip() else []
-        except json.JSONDecodeError:
-            data = []
-
-        total_errors = sum(f.get("errorCount", 0) for f in data)
-        total_warnings = sum(f.get("warningCount", 0) for f in data)
-        total_violations = total_errors + total_warnings
-        total_lines = count_source_lines(root)
-
-        if total_lines == 0:
-            score = 1.0
-        else:
-            violations_per_100 = (total_violations / total_lines) * 100
-            score = max(0.0, min(1.0, 1.0 - violations_per_100 / 10))
-
-        print(json.dumps({
-            "name": "lint_score",
-            "score": round(score, 4),
-            "details": {
-                "errors": total_errors,
-                "warnings": total_warnings,
-                "total_violations": total_violations,
-                "total_lines": total_lines,
-            },
-        }))
-
-    except FileNotFoundError:
-        print(json.dumps({
-            "name": "lint_score",
-            "score": 0.5,
-            "details": {"error": "eslint not found (npx eslint)"},
-        }))
-    except subprocess.TimeoutExpired:
-        print(json.dumps({
-            "name": "lint_score",
-            "score": 0.0,
-            "details": {"error": "eslint timed out"},
-        }))
-    except Exception as e:
-        print(json.dumps({
-            "name": "lint_score",
-            "score": 0.0,
-            "details": {"error": str(e)},
-        }))
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-# --- Rust: clippy score ---
-EVALUATOR_TEMPLATES["clippy_rust"] = '''\
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
-"""
-Clippy score evaluator for Rust projects.
-Uses cargo clippy to count warnings and compute a quality score.
-
-Score: 1.0 = no warnings, decreases as warnings increase.
-"""
-
-import json
-import subprocess
-import sys
-from pathlib import Path
-
-
-def main():
-    root = Path(".")
-
-    try:
-        result = subprocess.run(
-            ["cargo", "clippy", "--message-format=json", "--quiet"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            cwd=str(root),
-        )
-
-        warnings = 0
-        errors = 0
-        for line in result.stdout.splitlines():
-            try:
-                msg = json.loads(line)
-                if msg.get("reason") == "compiler-message":
-                    level = msg.get("message", {}).get("level", "")
-                    if level == "warning":
-                        warnings += 1
-                    elif level == "error":
-                        errors += 1
-            except json.JSONDecodeError:
-                continue
-
-        total = warnings + errors
-        # Score: 0 issues = 1.0, 50+ issues = 0.0
-        score = max(0.0, min(1.0, 1.0 - total / 50))
-
-        print(json.dumps({
-            "name": "clippy_score",
-            "score": round(score, 4),
-            "details": {
-                "warnings": warnings,
-                "errors": errors,
-                "total_issues": total,
-            },
-        }))
-
-    except FileNotFoundError:
-        print(json.dumps({
-            "name": "clippy_score",
-            "score": 0.5,
-            "details": {"error": "cargo not found"},
-        }))
-    except subprocess.TimeoutExpired:
-        print(json.dumps({
-            "name": "clippy_score",
-            "score": 0.0,
-            "details": {"error": "clippy timed out after 300s"},
-        }))
-    except Exception as e:
-        print(json.dumps({
-            "name": "clippy_score",
-            "score": 0.0,
-            "details": {"error": str(e)},
-        }))
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-# --- Go: vet score ---
-EVALUATOR_TEMPLATES["vet_go"] = '''\
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = []
-# ///
-"""
-Go vet score evaluator.
-Uses go vet to check for suspicious constructs.
-
-Score: 1.0 = no issues, 0.0 = issues found.
-"""
-
-import json
-import subprocess
-import sys
-from pathlib import Path
-
-
-def main():
-    root = Path(".")
-
-    try:
-        result = subprocess.run(
-            ["go", "vet", "./..."],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=str(root),
-        )
-
-        if result.returncode == 0:
-            score = 1.0
-            issues = 0
-        else:
-            # Count lines of vet output as issues
-            issue_lines = [
-                l for l in result.stderr.strip().splitlines()
-                if l.strip() and not l.startswith("#")
-            ]
-            issues = len(issue_lines)
-            # Score: 0 issues = 1.0, 20+ issues = 0.0
-            score = max(0.0, min(1.0, 1.0 - issues / 20))
-
-        print(json.dumps({
-            "name": "vet_score",
-            "score": round(score, 4),
-            "details": {
-                "issues": issues,
-                "passed": result.returncode == 0,
-            },
-        }))
-
-    except FileNotFoundError:
-        print(json.dumps({
-            "name": "vet_score",
-            "score": 0.5,
-            "details": {"error": "go not found"},
-        }))
-    except subprocess.TimeoutExpired:
-        print(json.dumps({
-            "name": "vet_score",
-            "score": 0.0,
-            "details": {"error": "go vet timed out"},
-        }))
-    except Exception as e:
-        print(json.dumps({
-            "name": "vet_score",
-            "score": 0.0,
-            "details": {"error": str(e)},
-        }))
-
-
-if __name__ == "__main__":
-    main()
-'''
