@@ -1,7 +1,5 @@
 """Tests for the initializer module."""
 
-from pathlib import Path
-
 import pytest
 
 from autoimprove.initializer import initialize_repo
@@ -38,6 +36,20 @@ class TestInitializeRepo:
         assert "Phase 3" in content
         assert "program.md" in content
         assert "NEVER STOP" in content
+
+    def test_creates_instructions_with_default_duration(self, repo):
+        initialize_repo(repo)
+        content = (repo / ".autoimprove" / "INSTRUCTIONS.md").read_text()
+        assert "300" in content
+        assert "experiment_duration_seconds: 300" in content
+
+    def test_creates_instructions_with_custom_duration(self, repo):
+        initialize_repo(repo, duration=600)
+        content = (repo / ".autoimprove" / "INSTRUCTIONS.md").read_text()
+        assert "600" in content
+        assert "experiment_duration_seconds: 600" in content
+        # Should NOT contain the default 300 in the config line
+        assert "experiment_duration_seconds: 300" not in content
 
     def test_creates_results_tsv(self, repo):
         initialize_repo(repo)

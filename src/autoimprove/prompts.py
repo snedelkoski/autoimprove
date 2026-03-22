@@ -17,6 +17,11 @@ This document tells you how to analyze the repository, build an evaluation
 system, write the improvement program, and run the loop. Follow it
 sequentially — each phase produces artifacts the next phase depends on.
 
+**Experiment time budget: {experiment_duration} seconds.**
+Every evaluator that runs the project's core functionality (training, benchmarks,
+integration tests, etc.) must complete within this budget. This makes experiments
+comparable — just like autoresearch's fixed 5-minute training window.
+
 ---
 
 ## Phase 1 — Understand the Repository
@@ -36,6 +41,19 @@ After reading, answer these questions (write the answers into `.autoimprove/anal
 so you can reference them later):
 
 - **What does this project do?** One paragraph.
+- **What is the project's primary success metric?** This is the single most important \
+question. What does "better" mean for this specific project? Examples:
+  - ML training repo → lower validation loss or higher benchmark accuracy
+  - API server → faster response times, higher correctness rate
+  - Compiler / interpreter → correctness on a test suite of programs, compilation speed
+  - CLI tool → correctness of output, performance on representative inputs
+  - Library / SDK → test pass rate, API coverage, documentation completeness
+  - Game / simulation → score, framerate, convergence speed
+
+  Be specific. "Better code quality" is not a primary metric. "val_bpb on the \
+WikiText-103 validation set" is. "Percentage of TabArena benchmarks where the model \
+beats XGBoost" is. The primary metric must be something you can **measure with a \
+script** and express as a **float in [0.0, 1.0]** (higher = better).
 - **File map**: every source file with a one-line description. Example:
   ```
   model.py        — Transformer architecture + sklearn-compatible wrappers
@@ -47,6 +65,8 @@ so you can reference them later):
 - **How to build**: exact shell command (e.g. `cargo build`, `npm run build`, or "N/A").
 - **How to test**: exact shell command (e.g. `uv run pytest`, `npm test`).
 - **How to run**: exact shell command if applicable.
+- **How to evaluate the primary metric**: exact shell command and expected output format. \
+If no evaluation script exists yet, describe what one would need to do.
 - **Editable files**: which files contain the core logic the agent should improve. \
 List them explicitly by name — not glob patterns. If there are many (>20), group by \
 directory.
@@ -62,10 +82,69 @@ lint violations, high complexity functions, dead code, poor error handling, etc.
 You need two things: individual **evaluator scripts** and an **eval harness** that runs \
 them all and computes a composite score.
 
-### 2a. Evaluator Scripts
+### 2a. The Primary Evaluator — What Actually Matters
+
+**This is the most important evaluator.** It measures the project's primary success \
+metric — the one you identified in Phase 1. Every other evaluator is supplementary.
+
+Think of it like autoresearch's `prepare.py`: it runs the project's core functionality \
+and produces a single number that captures whether the project got better or worse. \
+The primary evaluator should:
+
+1. **Run the project's actual workload** — train a model, serve requests, compile \
+programs, process inputs — whatever the project *does*.
+2. **Respect the time budget** — complete within {experiment_duration} seconds. If the \
+full workload takes longer, run a representative subset (e.g., train for \
+{experiment_duration}s instead of the full run, benchmark on 10 datasets instead of \
+100, test on 50 programs instead of 500).
+3. **Produce a score in [0.0, 1.0]** — higher is better. Normalize appropriately:
+   - For loss metrics: `score = max(0, 1 - loss / baseline_loss)` or use a sigmoid.
+   - For accuracy metrics: use directly if already in [0, 1].
+   - For pass rates: `score = n_passed / n_total`.
+   - For speed metrics: `score = min(1.0, target_time / actual_time)`.
+4. **Have the highest weight** — typically 3.0–5.0, dominating the composite score.
+
+**Examples by project type:**
+
+| Project type | Primary evaluator | What it does | Score formula |
+|---|---|---|---|
+| ML training | `val_loss` | Trains for {experiment_duration}s, reports validation loss | `max(0, 1 - val_loss / baseline_val_loss)` |
+| ML benchmark | `benchmark_score` | Runs eval suite with time cap | `mean_accuracy` across datasets |
+| API server | `api_correctness` | Sends test requests, checks responses | `n_correct / n_total` |
+| Compiler | `correctness` | Compiles + runs test programs | `n_passing / n_total` |
+| CLI tool | `output_correctness` | Runs on reference inputs, diffs output | `n_matching / n_total` |
+| Library | `test_pass_rate` | Runs the project's test suite | `n_passed / n_total` |
+| Data pipeline | `output_quality` | Runs pipeline on sample data, checks output | domain-specific |
+
+If this project is a library where the test suite IS the primary metric, that's fine — \
+`test_suite` can be both the primary evaluator and the most heavily weighted one. But \
+make that decision consciously after analyzing what the project does, not by default.
+
+### 2b. Supplementary Evaluators
+
+Create additional evaluator scripts for code quality dimensions. These catch regressions \
+and encourage clean code, but they should NOT dominate the composite score.
+
+| Evaluator | What it measures | Typical weight | When to use |
+|-----------|-----------------|---------------|-------------|
+| `test_suite` | Test pass rate | 2.0 | Always (if tests exist or should exist) |
+| `lint` | Linter violations (ruff, eslint, clippy) | 1.0 | Always |
+| `type_coverage` | Type annotation completeness | 0.5 | Typed languages |
+| `complexity` | Cyclomatic complexity | 0.5 | Large codebases |
+| `test_coverage` | Line/branch coverage | 1.0 | If coverage tooling exists |
+| `build` | Clean build with no warnings | 1.5 | Compiled languages |
+| `doc_coverage` | Docstring/JSDoc coverage | 0.5 | Libraries/APIs |
+
+**Weight guidelines**: The primary evaluator should have the highest weight — typically \
+2–5x any supplementary evaluator. If the primary evaluator is `test_suite` (e.g., for a \
+library), give it weight 3.0+ and keep supplementary evaluators at 0.5–1.5. An evaluator \
+that can be gamed trivially (e.g. adding `# type: ignore` everywhere) should have a \
+lower weight.
+
+### 2c. Evaluator Script Requirements
 
 Create self-contained Python scripts in `.autoimprove/evaluators/`. Each one measures \
-one dimension of code quality.
+one dimension.
 
 **Requirements for every evaluator script:**
 
@@ -96,31 +175,12 @@ standalone via `uv run .autoimprove/evaluators/<name>.py`.
 - Each script MUST be independent — no imports from the project, no shared state.
 - Output exactly one JSON line. Nothing else on stdout.
 - Exit 0 on success. Non-zero exit = score 0.0.
+- **Time budget**: evaluators that run the project's core workload (training, benchmarks, \
+integration tests) MUST complete within {experiment_duration} seconds. Use timeouts, \
+iteration caps, or dataset subsampling to enforce this. Code quality evaluators (lint, \
+type coverage) are typically fast and don't need explicit time caps.
 
-**Choose evaluators relevant to this project.** Common ones:
-
-| Evaluator | What it measures | Typical weight | When to use |
-|-----------|-----------------|---------------|-------------|
-| `test_suite` | Test pass rate | 3.0 | Always (if tests exist or should exist) |
-| `lint` | Linter violations (ruff, eslint, clippy) | 1.5 | Always |
-| `type_coverage` | Type annotation completeness | 1.0 | Typed languages |
-| `complexity` | Cyclomatic complexity | 1.0 | Large codebases |
-| `test_coverage` | Line/branch coverage | 2.0 | If coverage tooling exists |
-| `build` | Clean build with no warnings | 2.0 | Compiled languages |
-| `benchmark` | Performance on project's own benchmarks | 3.0 | If benchmarks exist |
-| `doc_coverage` | Docstring/JSDoc coverage | 0.5 | Libraries/APIs |
-
-You don't have to use these exact names or definitions. **Design evaluators that \
-capture what actually matters for this specific project.** An ML training repo might \
-have a `val_loss` evaluator. An API might have a `response_time` evaluator. A compiler \
-might have a `correctness` evaluator that runs a test suite of programs.
-
-**Weight guidelines**: The test suite should usually be the highest weight. An evaluator \
-that can be gamed trivially (e.g. just adding `# type: ignore` everywhere to "fix" type \
-errors) should have a lower weight. Evaluators that measure real correctness or \
-performance should be weighted highest.
-
-### 2b. Eval Harness
+### 2d. Eval Harness
 
 Create `.autoimprove/eval_harness.py` — the master evaluation script. It:
 
@@ -151,7 +211,7 @@ import time
 from pathlib import Path
 
 
-def run_evaluator(script: Path, cwd: Path, timeout: int = 120) -> dict:
+def run_evaluator(script: Path, cwd: Path, timeout: int = {experiment_duration}) -> dict:
     try:
         r = subprocess.run(
             ["uv", "run", str(script)],
@@ -240,6 +300,7 @@ the file you modify."
 - Strategy is specific: "A 0.001 val_bpb improvement that adds 20 lines of hacky code? \
 Probably not worth it."
 - The TSV schema has real example rows with real-looking values.
+- There is a **fixed time budget** — 5 minutes per experiment — making all runs comparable.
 
 Your program.md must have this level of specificity. **Never use glob patterns when you \
 can list files by name. Never use placeholder values when you can use real baseline \
@@ -263,6 +324,8 @@ configs control the build, .autoimprove/ is the evaluation system).
 - The exact command: `uv run .autoimprove/eval_harness.py`
 - The exact output format (paste the actual baseline JSON, or a representative example)
 - What each evaluator measures, its weight, and its current baseline score
+- **The primary metric**: which evaluator measures what actually matters, and why
+- **Time budget**: each evaluation run completes within {experiment_duration} seconds
 - A quick command to extract just the composite score from the log
 
 **4. The Experiment Loop** — The infinite loop, step by step:
@@ -278,6 +341,9 @@ LOOP FOREVER:
 8. If improved: keep the commit, update baseline
 9. If not improved: git reset --hard HEAD~1
 10. GOTO 1
+
+Time budget: {experiment_duration} seconds per evaluation run.
+Each experiment must be evaluable within this window.
 ```
 
 **5. Logging** — The results.tsv format:
@@ -286,7 +352,11 @@ LOOP FOREVER:
 - Include 3-4 example rows with realistic values from this project's baseline
 
 **6. Strategy** — Prioritized improvement ideas based on the baseline:
-- Start with the highest-impact items. If tests score 0.0, that's #1.
+- **Start with the primary metric.** If the project trains a model and the baseline \
+val_loss evaluator scores 0.3, improving model architecture or training loop is higher \
+impact than adding type annotations.
+- Look at which evaluator has the most room for improvement AND the highest weight — \
+that's where to focus first.
 - Include specific targets: "Add return type annotations to these 12 functions in \
 model.py" is better than "improve type coverage."
 - The simplicity criterion: "All else equal, simpler is better. Removing code and \
@@ -314,6 +384,7 @@ The eval harness reads this for evaluator weights.
 version: "1.0"
 repo: {repo_name}
 summary: "<one-line project description>"
+experiment_duration_seconds: {experiment_duration}
 
 tech_stack:
   language: "<primary language>"
@@ -331,10 +402,18 @@ protected_paths:
   - ".autoimprove/"
   - "<other protected paths>"
 
+primary_metric:
+  name: "<evaluator_name>"
+  description: "<what the project's primary success metric is>"
+
 evaluators:
-  - name: "<evaluator_name>"
+  - name: "<primary_evaluator_name>"
+    description: "<what it measures — the primary metric>"
+    weight: <float — highest weight, typically 3.0-5.0>
+    timeout: {experiment_duration}
+  - name: "<supplementary_evaluator>"
     description: "<what it measures>"
-    weight: <float>
+    weight: <float — lower than primary, typically 0.5-2.0>
     timeout: <seconds>
 ```
 
@@ -362,13 +441,18 @@ placeholders.
 Before starting the improvement loop, verify:
 
 - [ ] `.autoimprove/analysis.md` exists with your repo analysis
-- [ ] `.autoimprove/evaluators/` has at least one evaluator script
+- [ ] `.autoimprove/analysis.md` identifies the **primary success metric** for this project
+- [ ] `.autoimprove/evaluators/` has a **primary evaluator** that measures what actually \
+matters
+- [ ] `.autoimprove/evaluators/` has supplementary evaluators for code quality
 - [ ] `.autoimprove/eval_harness.py` exists and runs successfully
-- [ ] `.autoimprove/config.yaml` exists with evaluator weights
+- [ ] `.autoimprove/config.yaml` exists with evaluator weights (primary evaluator has \
+highest weight)
 - [ ] `.autoimprove/program.md` exists with all sections filled in
 - [ ] `.autoimprove/baselines/baseline.json` exists with real scores
 - [ ] `.autoimprove/results.tsv` has the header row and baseline entry
 - [ ] `program.md` contains actual baseline numbers, not placeholders
+- [ ] Primary evaluator completes within {experiment_duration} seconds
 
 Everything ready? Read `program.md` and begin.
 """

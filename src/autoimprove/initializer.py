@@ -13,6 +13,7 @@ from pathlib import Path
 from autoimprove.config import (
     AUTOIMPROVE_DIR,
     BASELINE_DIR,
+    DEFAULT_EXPERIMENT_DURATION,
     EVALUATORS_DIR,
     EXPERIMENTS_DIR,
     INSTRUCTIONS_FILE,
@@ -23,7 +24,9 @@ from autoimprove.prompts import INSTRUCTIONS_MD
 logger = logging.getLogger(__name__)
 
 
-def initialize_repo(repo_path: Path, force: bool = False) -> None:
+def initialize_repo(
+    repo_path: Path, force: bool = False, duration: int = DEFAULT_EXPERIMENT_DURATION
+) -> None:
     """Initialize a repository for autoimprove.
 
     Creates the .autoimprove/ directory with:
@@ -36,14 +39,13 @@ def initialize_repo(repo_path: Path, force: bool = False) -> None:
     Args:
         repo_path: Path to the target repository root.
         force: If True, overwrite existing .autoimprove/ directory.
+        duration: Experiment time budget in seconds (default 300 = 5 minutes).
     """
     repo_path = repo_path.resolve()
     ai_dir = repo_path / AUTOIMPROVE_DIR
 
     if ai_dir.exists() and not force:
-        raise FileExistsError(
-            f"{ai_dir} already exists. Use --force to overwrite."
-        )
+        raise FileExistsError(f"{ai_dir} already exists. Use --force to overwrite.")
 
     if not repo_path.is_dir():
         raise NotADirectoryError(f"Not a directory: {repo_path}")
@@ -57,7 +59,10 @@ def initialize_repo(repo_path: Path, force: bool = False) -> None:
         (ai_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # Write INSTRUCTIONS.md
-    instructions = INSTRUCTIONS_MD.format(repo_name=repo_path.name)
+    instructions = INSTRUCTIONS_MD.format(
+        repo_name=repo_path.name,
+        experiment_duration=duration,
+    )
     (ai_dir / INSTRUCTIONS_FILE).write_text(instructions)
 
     # Write results.tsv header
@@ -66,5 +71,7 @@ def initialize_repo(repo_path: Path, force: bool = False) -> None:
     )
 
     print(f"\nCreated {ai_dir}/")
-    print(f"\nNext step: tell your coding agent to read "
-          f".autoimprove/{INSTRUCTIONS_FILE} and set up the improvement program.")
+    print(
+        f"\nNext step: tell your coding agent to read "
+        f".autoimprove/{INSTRUCTIONS_FILE} and set up the improvement program."
+    )

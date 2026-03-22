@@ -15,6 +15,7 @@ import click
 from autoimprove import __version__
 from autoimprove.config import (
     AUTOIMPROVE_DIR,
+    DEFAULT_EXPERIMENT_DURATION,
     INSTRUCTIONS_FILE,
     RESULTS_FILE,
     load_baseline,
@@ -43,8 +44,18 @@ def main():
 
 @main.command()
 @click.argument("path", type=click.Path(exists=True, file_okay=False, dir_okay=True))
-@click.option("--force", is_flag=True, help="Overwrite existing .autoimprove/ directory")
-def init(path: str, force: bool):
+@click.option(
+    "--force", is_flag=True, help="Overwrite existing .autoimprove/ directory"
+)
+@click.option(
+    "--duration",
+    type=int,
+    default=DEFAULT_EXPERIMENT_DURATION,
+    show_default=True,
+    help="Experiment time budget in seconds. Evaluators that run the project's core "
+    "workload (training, benchmarks, etc.) must complete within this window.",
+)
+def init(path: str, force: bool, duration: int):
     """Initialize a repository for autonomous self-improvement.
 
     Creates .autoimprove/ with INSTRUCTIONS.md — a detailed guide for your
@@ -58,12 +69,15 @@ def init(path: str, force: bool):
         autoimprove init ./my-project
 
         autoimprove init /path/to/repo --force
+
+        autoimprove init ./ml-repo --duration 600
     """
     repo_path = Path(path).resolve()
 
     try:
         from autoimprove.initializer import initialize_repo
-        initialize_repo(repo_path, force=force)
+
+        initialize_repo(repo_path, force=force, duration=duration)
     except FileExistsError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -146,8 +160,10 @@ def status(path: str):
     discarded = sum(1 for e in experiments if "\tdiscard\t" in e)
     crashed = sum(1 for e in experiments if "\tcrash\t" in e)
 
-    click.echo(f"\nExperiments: {len(experiments)} total "
-               f"({kept} kept, {discarded} discarded, {crashed} crashed)")
+    click.echo(
+        f"\nExperiments: {len(experiments)} total "
+        f"({kept} kept, {discarded} discarded, {crashed} crashed)"
+    )
 
     if experiments:
         click.echo("\nRecent experiments:")
@@ -169,7 +185,9 @@ def status(path: str):
         baseline_score = baseline.get("composite_score", 0)
         if baseline_score > 0:
             improvement = ((best_score - baseline_score) / baseline_score) * 100
-            click.echo(f"\nBest score: {best_score:.6f} ({improvement:+.1f}% vs baseline)")
+            click.echo(
+                f"\nBest score: {best_score:.6f} ({improvement:+.1f}% vs baseline)"
+            )
 
 
 if __name__ == "__main__":

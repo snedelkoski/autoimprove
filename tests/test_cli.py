@@ -1,7 +1,6 @@
 """Tests for the autoimprove CLI."""
 
 import json
-from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -113,6 +112,28 @@ class TestInit:
     def test_init_output_mentions_instructions(self, runner, repo):
         result = runner.invoke(main, ["init", str(repo)])
         assert "INSTRUCTIONS.md" in result.output
+
+    def test_init_has_duration_option(self, runner):
+        result = runner.invoke(main, ["init", "--help"])
+        assert "--duration" in result.output
+
+    def test_init_default_duration(self, runner, repo):
+        runner.invoke(main, ["init", str(repo)])
+        content = (repo / ".autoimprove" / "INSTRUCTIONS.md").read_text()
+        assert "experiment_duration_seconds: 300" in content
+
+    def test_init_custom_duration(self, runner, repo):
+        runner.invoke(main, ["init", str(repo), "--duration", "600"])
+        content = (repo / ".autoimprove" / "INSTRUCTIONS.md").read_text()
+        assert "600" in content
+        assert "experiment_duration_seconds: 600" in content
+
+    def test_init_instructions_has_primary_metric(self, runner, repo):
+        """Instructions must guide agent to identify domain-specific primary metric."""
+        runner.invoke(main, ["init", str(repo)])
+        content = (repo / ".autoimprove" / "INSTRUCTIONS.md").read_text()
+        assert "primary success metric" in content
+        assert "Primary Evaluator" in content
 
 
 class TestStatus:

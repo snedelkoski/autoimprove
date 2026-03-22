@@ -3,16 +3,10 @@
 import json
 from pathlib import Path
 
-import pytest
 
 from autoimprove.config import (
     AUTOIMPROVE_DIR,
-    BASELINE_DIR,
-    BASELINE_FILE,
     CONFIG_FILE,
-    EVAL_HARNESS_FILE,
-    EVALUATORS_DIR,
-    EXPERIMENTS_DIR,
     INSTRUCTIONS_FILE,
     PROGRAM_FILE,
     RESULTS_FILE,

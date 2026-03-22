@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Constants — directory/file names inside .autoimprove/
 # ---------------------------------------------------------------------------
@@ -27,11 +26,13 @@ BASELINE_FILE = "baseline.json"
 EXPERIMENTS_DIR = "experiments"
 EVALUATORS_DIR = "evaluators"
 ANALYSIS_FILE = "analysis.md"
+DEFAULT_EXPERIMENT_DURATION = 300  # seconds (5 minutes)
 
 
 # ---------------------------------------------------------------------------
 # Helpers for the status command
 # ---------------------------------------------------------------------------
+
 
 def get_autoimprove_dir(repo_path: str | Path) -> Path:
     """Get the .autoimprove directory for a repo."""
