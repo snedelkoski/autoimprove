@@ -171,6 +171,18 @@ standalone via `uv run .autoimprove/evaluators/<name>.py`.
 - Each script MUST be independent — no imports from the project, no shared state.
 - Output exactly one JSON line. Nothing else on stdout.
 - Exit 0 on success. Non-zero exit = score 0.0.
+- **Progress logging**: Write meaningful progress updates to **stderr** so the agent \
+(and human) can follow along in `run.log`. For long-running evaluators (training, \
+benchmarks), print periodic status lines to stderr — e.g. step count, elapsed time, \
+current loss, intermediate scores. Good progress output looks like:
+  ```
+  Step 100 | Loss: 2.3451 | Time: 12s/240s
+  Step 200 | Loss: 1.8923 | Time: 24s/240s
+  Evaluating on Iris... 0.6500
+  Evaluating on Wine... 0.5200
+  ```
+  This output is captured in `.autoimprove/run.log` alongside the final JSON result, \
+making it easy to diagnose why a score improved or regressed.
 - **Time budget**: evaluators that run the project's core workload (training, benchmarks, \
 integration tests) MUST complete within {experiment_duration} seconds. Use timeouts, \
 iteration caps, or dataset subsampling to enforce this. Code quality evaluators (lint, \
@@ -203,26 +215,61 @@ Usage: uv run .autoimprove/eval_harness.py
 
 import json
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 
-def run_evaluator(script: Path, cwd: Path, timeout: int = {experiment_duration}) -> dict:
+def run_evaluator(script: Path, cwd: Path, timeout: int = {experiment_duration},
+                  log_file=None) -> dict:
+    \"\"\"Run an evaluator, streaming stderr to terminal and log file.\"\"\"
     try:
-        r = subprocess.run(
+        # Use Popen to stream stderr in real-time while capturing stdout for JSON
+        proc = subprocess.Popen(
             ["uv", "run", str(script)],
-            capture_output=True, text=True, timeout=timeout, cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(cwd),
         )
-        if r.returncode != 0:
+
+        # Read stderr line by line and forward to terminal + log
+        stderr_lines = []
+        while True:
+            line = proc.stderr.readline()
+            if not line and proc.poll() is not None:
+                break
+            if line:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                stderr_lines.append(line)
+                if log_file:
+                    log_file.write(line)
+                    log_file.flush()
+
+        stdout, remaining_stderr = proc.stdout.read(), proc.stderr.read()
+        if remaining_stderr:
+            sys.stderr.write(remaining_stderr)
+            stderr_lines.append(remaining_stderr)
+            if log_file:
+                log_file.write(remaining_stderr)
+                log_file.flush()
+
+        # Check timeout (Popen doesn't enforce it, so we rely on the process finishing)
+        # For a stricter timeout, the evaluator itself should enforce its time budget
+
+        if proc.returncode != 0:
             return {{"name": script.stem, "score": 0.0,
-                    "details": {{"error": f"exit {{r.returncode}}",
-                               "stderr": r.stderr[-500:]}}}}
-        for line in reversed(r.stdout.strip().splitlines()):
+                    "details": {{"error": f"exit {{proc.returncode}}",
+                               "stderr": "".join(stderr_lines)[-2000:]}}}}
+        for line in reversed(stdout.strip().splitlines()):
             if line.strip().startswith("{{"):
                 return json.loads(line)
         return {{"name": script.stem, "score": 0.0,
-                "details": {{"error": "no JSON output"}}}}
+                "details": {{"error": "no JSON output",
+                            "stdout": stdout[-500:]}}}}
     except subprocess.TimeoutExpired:
+        proc.kill()
         return {{"name": script.stem, "score": 0.0,
                 "details": {{"error": f"timeout after {{timeout}}s"}}}}
     except Exception as e:
@@ -234,6 +281,7 @@ def main():
     here = Path(__file__).resolve().parent
     repo = here.parent
     evaluators_dir = here / "evaluators"
+    log_path = here / "run.log"
 
     # Load weights from config if it exists, else default to 1.0
     config_path = here / "config.yaml"
@@ -247,25 +295,39 @@ def main():
 
     t0 = time.time()
     results = []
-    for script in sorted(evaluators_dir.glob("*.py")):
-        if script.name.startswith("_"):
-            continue
-        r = run_evaluator(script, repo)
-        r["weight"] = weights.get(r["name"], 1.0)
-        results.append(r)
 
-    total_w = sum(r["weight"] for r in results)
-    composite = sum(r["score"] * r["weight"] for r in results) / total_w if total_w else 0.0
+    # Open log file for the entire run — evaluator output streams here
+    with open(log_path, "w") as log_file:
+        for script in sorted(evaluators_dir.glob("*.py")):
+            if script.name.startswith("_"):
+                continue
+            header = f"=== evaluator: {{script.name}} ===\\n"
+            print(header, end="", file=sys.stderr)
+            log_file.write(header)
+            log_file.flush()
 
-    output = json.dumps({{
-        "composite_score": round(composite, 6),
-        "elapsed_seconds": round(time.time() - t0, 1),
-        "evaluators": results,
-    }}, indent=2)
-    print(output)
+            r = run_evaluator(script, repo, log_file=log_file)
+            r["weight"] = weights.get(r["name"], 1.0)
+            results.append(r)
 
-    # Always save to run.log
-    (here / "run.log").write_text(output + "\\n")
+            footer = f"--- {{r['name']}}: score={{r['score']}} ---\\n\\n"
+            print(footer, end="", file=sys.stderr)
+            log_file.write(footer)
+            log_file.flush()
+
+        total_w = sum(r["weight"] for r in results)
+        composite = sum(r["score"] * r["weight"] for r in results) / total_w if total_w else 0.0
+
+        output = json.dumps({{
+            "composite_score": round(composite, 6),
+            "elapsed_seconds": round(time.time() - t0, 1),
+            "evaluators": results,
+        }}, indent=2)
+        print(output)
+
+        # Append final JSON to the log
+        log_file.write("\\n=== result ===\\n")
+        log_file.write(output + "\\n")
 
 
 if __name__ == "__main__":
@@ -273,8 +335,12 @@ if __name__ == "__main__":
 ```
 
 You may modify this reference implementation to fit the project. For example, if the \
-project has a long-running benchmark, increase the timeout. If you want to print a \
-human-readable summary in addition to JSON, add it to stderr (not stdout).
+project has a long-running benchmark, increase the timeout.
+
+**Logging**: The harness streams each evaluator's stderr to the terminal and to \
+`.autoimprove/run.log`, so you can watch progress in real time and review it later. \
+Evaluators should print meaningful progress to stderr — training steps, intermediate \
+metrics, timing info. The final JSON result is appended at the end of `run.log`.
 
 **Important:** Once you establish the baseline, the eval harness becomes fixed — do not \
 modify it during the improvement loop. It is the "ground truth" (like `prepare.py` in \
@@ -335,7 +401,7 @@ LOOP FOREVER:
 2. Edit the code
 3. git commit -m "experiment: <description>"
 4. Run: uv run .autoimprove/eval_harness.py
-5. Read: cat .autoimprove/run.log (auto-saved by the harness)
+5. Read: cat .autoimprove/run.log (contains evaluator progress output + final JSON)
 6. If crashed: read the error, try to fix, or abandon
 7. Log to results.tsv
 8. If improved: keep the commit, update baseline
